@@ -1,0 +1,10 @@
+# build.sh output
+PrimeBridge-source/build/
+PrimeBridge-source/dist/
+*.o
+
+# Built kexts go in Releases, not in the tree
+*.kext/
+
+# macOS
+.DS_Store

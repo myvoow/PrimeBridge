@@ -1,0 +1,86 @@
+name: Test report
+description: Tell us how PrimeBridge behaves on your laptop (working or not)
+title: "[Test] <laptop model>: <works / black screen / ...>"
+labels: ["test report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing. Reports from laptops other than the Acer Nitro V 15 ANV15-41 are the most useful, even when nothing works.
+        Leave a still, bright desktop on screen for about a minute after login before collecting the log.
+  - type: input
+    id: laptop
+    attributes:
+      label: Laptop model
+      placeholder: Acer Nitro V 15 ANV15-41
+    validations:
+      required: true
+  - type: input
+    id: cpu
+    attributes:
+      label: CPU and iGPU (with PCI ID)
+      placeholder: Ryzen 5 7535HS, Radeon 680M 1002:1681
+    validations:
+      required: true
+  - type: input
+    id: dgpu
+    attributes:
+      label: NVIDIA GPU (with PCI ID)
+      placeholder: RTX 4050 Laptop 10de:28a1
+    validations:
+      required: true
+  - type: input
+    id: panel
+    attributes:
+      label: Internal panel resolution and refresh rate
+      placeholder: 1920x1080 144 Hz
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: macOS, NullMoth and PrimeBridge versions
+      placeholder: macOS 26.7.2, NullMoth 2.6.3, PrimeBridge 0.4.8
+    validations:
+      required: true
+  - type: dropdown
+    id: fixpat
+    attributes:
+      label: Is the "Fix PAT" kernel patch disabled?
+      options:
+        - "Yes, disabled"
+        - "No, still enabled"
+        - "Not sure"
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: What do you see on the internal screen?
+      options:
+        - Works (direct mode)
+        - Works, but stays in staging mode
+        - Wrong colors or skewed image
+        - Frozen image
+        - Black screen
+        - Kernel panic or no boot
+        - Other (describe below)
+    validations:
+      required: true
+  - type: textarea
+    id: ioreg
+    attributes:
+      label: Output of `ioreg -rc PrimeBridge -d1`
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Output of `tail -40 /var/log/PrimeBridge.log`
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Boot-args, other kexts that touch graphics, what you already tried.

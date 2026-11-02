@@ -1,0 +1,81 @@
+diff --git a/kexts/NVRMFB/fb/nvrm-fb.cpp b/kexts/NVRMFB/fb/nvrm-fb.cpp
+index 1f4657a..c0d473c 100644
+--- a/kexts/NVRMFB/fb/nvrm-fb.cpp
++++ b/kexts/NVRMFB/fb/nvrm-fb.cpp
+@@ -662,6 +662,26 @@ static NvU32 nvrmQueryHdaConnectorType(struct NvKmsKapiFunctionsTable *kms, stru
+ }
+ static struct NvKmsKapiDevice *gDev;
+ static struct nvrm_dpy_rec gDpy[NVKMS_KAPI_MAX_CONNECTORS * 2];
++// nvfbforce=1 (laptop whose panel is on another GPU, nothing plugged into this card): one HDMI connector is reported
++// connected with this EDID, so head 0 exists, WindowServer composites on this GPU, and PrimeBridge copies it to the panel.
++// NVKMS honours forceConnected only on the query that carries it, so every query of that display carries it.
++static NvKmsKapiDisplay gForcedDpy = 0;
++static const NvU8 kForcedEdid[128] = {   // "PrimeBridge", 1920x1080 CEA 60 Hz (148.5 MHz: no HDMI extension needed)
++    0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x3a, 0xac, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x14, 0x20, 0x01, 0x04, 0xa5, 0x22, 0x13, 0x78, 0x0e, 0xee, 0x91, 0xa3, 0x54, 0x4c, 0x99, 0x26,
++    0x0f, 0x50, 0x54, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
++    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x02, 0x3a, 0x80, 0x18, 0x71, 0x38, 0x2d, 0x40, 0x58, 0x2c,
++    0x45, 0x00, 0x58, 0xc1, 0x10, 0x00, 0x00, 0x1e, 0x00, 0x00, 0x00, 0xfc, 0x00, 0x50, 0x72, 0x69,
++    0x6d, 0x65, 0x42, 0x72, 0x69, 0x64, 0x67, 0x65, 0x0a, 0x20, 0x00, 0x00, 0x00, 0xfd, 0x00, 0x30,
++    0x90, 0x1e, 0xa0, 0x1e, 0x00, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x00, 0x00, 0x00, 0x10,
++    0x00, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x00, 0xdb,
++};
++static void nvrmForce(struct NvKmsKapiDynamicDisplayParams *dd)
++{
++    if (!gForcedDpy || dd->handle != gForcedDpy) return;
++    dd->forceConnected = NV_TRUE; dd->overrideEdid = NV_TRUE;
++    dd->edid.bufferSize = sizeof kForcedEdid; nvu_copy(dd->edid.buffer, kForcedEdid, sizeof kForcedEdid);
++}
+ static int gNDpy = -1;
+ // How many displays the boot enumeration found. A framebuffer whose display index is >= this exists because a display
+ // appeared after boot (hotplugFire adds it to gDpy and re-registers the idle nub), and that instance is the one that
+@@ -928,8 +948,18 @@ bool NVRMNVDAFramebuffer::kapiInit()
+         struct NvKmsKapiDynamicDisplayParams *dd = (struct NvKmsKapiDynamicDisplayParams *)IOMalloc(sizeof *dd);
+         if (!dd) return false;
+         gNDpy = 0;
+-        for (NvU32 i = 0; i < n; i++) {
+-            nvu_zero(dd, sizeof *dd); dd->handle = handles[i];
++        uint32_t force = 0;
++        PE_parse_boot_argn("nvfbforce", &force, sizeof force);
++        // pass 1 (nvfbforce=1 and pass 0 found nothing): force the first HDMI connector; DP would need a sink to train
++        for (int pass = 0; pass < (force ? 2 : 1) && gNDpy == 0; pass++)
++        for (NvU32 i = 0; i < n && !(pass && gNDpy); i++) {
++            if (pass) {
++                struct NvKmsKapiStaticDisplayInfo hs = {};
++                if (!fKms->getStaticDisplayInfo(fDev, handles[i], &hs) ||
++                    nvrmQueryHdaConnectorType(fKms, fDev, hs.connectorHandle) != 0x800) continue;
++                gForcedDpy = handles[i];
++            }
++            nvu_zero(dd, sizeof *dd); dd->handle = handles[i]; nvrmForce(dd);
+             if (!fKms->getDynamicDisplayInfo(fDev, dd)) {
+                 FBLOG("dpy %u/%u 0x%x: getDynamicDisplayInfo FAILED", i, n, handles[i]);
+                 continue;
+@@ -950,6 +980,10 @@ bool NVRMNVDAFramebuffer::kapiInit()
+             nvu_copy(r->edid, dd->edid.buffer, r->edidSize);
+         }
+         IOFree(dd, sizeof *dd);
++        if (!gNDpy) gForcedDpy = 0;   // no HDMI connector took the force: never force one later
++        if (gForcedDpy)
++            FBLOG("nvfbforce: nothing plugged in -- HDMI display 0x%x forced connected (EDID \"PrimeBridge\" 1920x1080@60)",
++                  gForcedDpy);
+         if (getProvider()) getProvider()->setProperty("connected-displays", (unsigned long long)gNDpy, 32);
+         FBLOG("ENUMERATED: %d connected display(s) of %u handle(s), %u heads available",
+               gNDpy, n, fNumHeads);
+@@ -1554,7 +1588,7 @@ void NVRMNVDAFramebuffer::hotplugFire(thread_call_param_t, thread_call_param_t)
+     for (NvU32 i = 0; i < n; i++) {
+         bool known = false; int kdpy = -1;
+         for (int k = 0; k < gNDpy; k++) if (gDpy[k].handle == handles[i]) { known = true; kdpy = k; break; }
+-        nvu_zero(dd, sizeof *dd); dd->handle = handles[i];
++        nvu_zero(dd, sizeof *dd); dd->handle = handles[i]; nvrmForce(dd);
+         bool dynOk = me->fKms->getDynamicDisplayInfo(me->fDev, dd);
+         if (known) {
+             // 1401/driver issue #110: switching the monitor to another input and back left it with no picture. The link
+@@ -1629,7 +1663,7 @@ void NVRMNVDAFramebuffer::hotplugFire(thread_call_param_t, thread_call_param_t)
+         bool listed = false;
+         for (NvU32 i = 0; i < n; i++) if (gDpy[k].handle == handles[i]) { listed = true; break; }
+         if (listed) continue;
+-        nvu_zero(dd, sizeof *dd); dd->handle = gDpy[k].handle;
++        nvu_zero(dd, sizeof *dd); dd->handle = gDpy[k].handle; nvrmForce(dd);
+         if (!me->fKms->getDynamicDisplayInfo(me->fDev, dd) || dd->connected) continue;
+         gDpy[k].connected = false;
+         for (unsigned f = 0; f < sizeof gFBs / sizeof gFBs[0]; f++) {

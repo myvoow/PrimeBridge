@@ -1,0 +1,168 @@
+# PrimeBridge 0.4.8: NVIDIA-accelerated macOS on a 680M internal panel (no MUX)
+
+PrimeBridge lets a hackintosh laptop without a MUX switch show the desktop on its internal screen while macOS renders on the NVIDIA GPU (NullMoth driver, Metal). The internal panel is wired only to the AMD Radeon 680M, which has no macOS driver. PrimeBridge reuses the framebuffer the firmware (GOP) left on the 680M and makes NullMoth's frames land in it.
+
+Tested on exactly one machine: Acer Nitro V 15 ANV15-41 (Ryzen 5 7535HS, Radeon 680M `0x1681`, RTX 4050 Laptop, 1920x1080 144 Hz panel), macOS 26.7.2, NullMoth 2.6.3. Anything else is untested. Keep an HDMI monitor at hand for your first boots.
+
+## What is in this folder
+
+| Item | What it is |
+|---|---|
+| `PrimeBridge.kext` | The driver, version 0.4.8 (binary md5 `5048ff6bac5cc0ae7ac8b1beb6f4d838`). Inject it with OpenCore. |
+| `NVRMFB.kext` | NullMoth 2.6.3 NVRMFB with the `nvfbforce` patch (binary md5 `6a3402872b7b14a5485aeda97afc7df2`). Goes in `/Library/Extensions`. |
+| `install-nvrmfb.sh` | Installs `NVRMFB.kext`, keeps your original, rebuilds the auxiliary kernel collection. |
+| `NVRMFB-patch/nvfbforce.patch` | The source change to NullMoth's `kexts/NVRMFB/fb/nvrm-fb.cpp` (tag v2.6.3). |
+| `NVRMFB-patch/NullMoth-LICENSE`, `NullMoth-NOTICE` | NullMoth's license (PolyForm Noncommercial). The patched NVRMFB is shared under it: noncommercial use only. |
+| `PrimeBridge-source/` | PrimeBridge sources and `build.sh`. |
+
+## How it works
+
+### The problem
+
+- The internal panel is physically connected to the 680M. macOS has no driver for it, so it cannot render there.
+- NullMoth drives the NVIDIA GPU, but its accelerator (NVAccel) only runs when an NVIDIA display "head" exists, which needs a monitor plugged into the NVIDIA card.
+- The firmware's GOP already lit the panel and left the 680M scanning out a plain framebuffer in the 680M's memory (1920x1080, 32 bpp, BGRX). Anything written there appears on the panel.
+
+### The data path
+
+1. **NVRMFB with `nvfbforce=1`.** When nothing is plugged in, the first HDMI connector of the NVIDIA GPU is reported connected with a built-in EDID named "PrimeBridge" (1920x1080 at 60 Hz, 148.5 MHz). NVIDIA head 0 exists, WindowServer composites on the RTX with Metal, and NVAccel runs. DisplayPort cannot be faked this way because DP needs a real sink to train the link; HDMI does not.
+2. **NVAccel's present.** For every frame, WindowServer's swap goes through `NVDisplayPipe::performTransaction` (in NullMoth's `nvrm-accel.cpp`). With zero-copy flips off (`debug.nvaccel_iop_flip=0`, which PrimeBridge enforces), NVAccel copies the composited IOSurface with the CPU into the framebuffer address it gets from NVRMFB (`fKva`).
+3. **PrimeBridge redirects `fKva`.** It finds `NVRMNVDAFramebuffer`, checks its private fields against the public `nvScanoutInfo` call, then overwrites `fKva` (object offset `0x2d8` in NVRMFB 2.6.3).
+4. **Startup mode ("staging").** At first `fKva` points to a cached RAM buffer. A 60 Hz timer (20 Hz when idle) compares it row by row with a shadow copy and writes changed rows to the GOP framebuffer.
+5. **Probe and direct mode.** About a minute after boot, on a still screen, PrimeBridge does the following. All of it is read-only except the last two steps.
+   - It maps the 680M's register BAR (BAR5).
+   - It reads `GCMC_VM_FB_OFFSET` to find the 680M's VRAM in system RAM (`0x440000000` on the test machine, 512 MB). Linux amdgpu accesses VRAM this way on every x86 APU.
+   - It compares 32 rows read there with what it wrote, and logs `MATCH`.
+   - It times rewriting 64 identical rows (invisible) through three mappings: BAR0 as mapped at boot, BAR0 write-combined, and VRAM write-combined. It keeps the fastest.
+   - If writes are fast (under 3 µs per row) and the NVIDIA mode has exactly the panel's width, height and pitch, it points `fKva` straight at the panel's framebuffer. NVAccel then writes each frame directly to the screen, with no staging copy, no diff and no PrimeBridge timer in the way. The log says `direct` and `PrimeMode` becomes `direct-kva`.
+6. **Geometry check.** Every 64 timer ticks PrimeBridge re-reads the NVIDIA scanout geometry. On a change (resolution switch, re-allocation) it restores NVRMFB's original pointer and falls back to staging, then goes direct again when the geometry matches.
+7. **Panel refresh.** PrimeBridge reads the 680M's OTG frame counter and logs the panel's real refresh rate on every `rate-hint` line.
+
+### Why the "Fix PAT" OpenCore patch must be off
+
+macOS maps write-combined (WC) memory through PAT entry PA6. AMD Vanilla's `_mtrr_update_action | Fix PAT` patches (Algrey's is enabled by default) replace macOS's PAT with `0x0007010600070106`, where PA6 is UC- (uncached). Every WC mapping in macOS then becomes uncached: PrimeBridge's writes, but also CPU access to NVIDIA VRAM.
+
+On the test machine, measured per 7680-byte row:
+
+| | Fix PAT on | Fix PAT off |
+|---|---|---|
+| BAR0 | 39.7 µs | 2.0 µs |
+| 680M VRAM, write-combined | 75.4 µs | 1.4 µs (about 5.7 GB/s) |
+| Result | staging mode, `kernel_task` 75 % in video | direct mode, `kernel_task` 2.5 % |
+
+AMD Vanilla's README says the patch does not improve performance and that some systems run better without it. Test without it on a USB stick first.
+
+## Requirements
+
+- AMD Rembrandt / Rembrandt-R APU with a Radeon 680M, PCI ID `1002:1681`. PrimeBridge only matches that ID (`IOPCIPrimaryMatch` `0x16811002`), and its register offsets are for GC 10.3.3 / DCN 3.1.2.
+- An NVIDIA GPU supported by NullMoth 2.6.3, with **NullMoth 2.6.3 exactly** (NVRM, NVAccel, NVRMAGDC from NullMoth, plus this patched NVRMFB). The `0x2d8` field offsets are only valid for this NVRMFB build; PrimeBridge checks them and refuses to redirect if they do not match.
+- At least one HDMI connector wired to the NVIDIA GPU, with nothing plugged into it.
+- macOS booting normally first (USB ports mapped, etc.). PrimeBridge does not help with boot problems.
+- The firmware's boot framebuffer must be 32 bpp inside the 680M's BAR0 (PrimeBridge checks and refuses otherwise).
+
+## Installation
+
+1. Get macOS booting with NullMoth 2.6.3 working on an external monitor first.
+2. Install the patched NVRMFB:
+   ```bash
+   sudo sh install-nvrmfb.sh
+   ```
+   Approve the update in System Settings > Privacy & Security if macOS asks, then reboot.
+3. Copy `PrimeBridge.kext` to `EFI/OC/Kexts/` and add it to `Kernel > Add` in `config.plist` (BundlePath `PrimeBridge.kext`, ExecutablePath `Contents/MacOS/PrimeBridge`, PlistPath `Contents/Info.plist`, Enabled true, no MinKernel/MaxKernel needed).
+4. In `config.plist`, `Kernel > Patch`: disable `Algrey / Zormeister | _mtrr_update_action | Fix PAT | 15.0+` (and leave the Shaneee variants disabled).
+5. Boot-args. The test machine runs:
+   ```
+   debug=0x100 keepsyms=1 nvfb=1 nvaccel=1 nvfbheads=4 -nvkmsnosmooth -nvrmnoflip nvfbforce=1 nvcursor=0
+   ```
+   plus its own unrelated args (`-vi2c-force-polling`, `revpatch=sbvmm`, AMFI args, etc.). The ones that matter here are NullMoth's (`nvfb=1 nvaccel=1`), `nvfbforce=1` (fake HDMI monitor) and `nvcursor=0` (no NVIDIA hardware cursor, so macOS draws the cursor into the frame and it shows on the panel). Check NullMoth's docs for the rest of its args.
+6. Unplug any monitor from the NVIDIA GPU and reboot. Wait about a minute on a still desktop after login so the probe can run.
+
+### Rollback
+
+- Black internal screen: plug an HDMI monitor into the NVIDIA GPU (the fake connector only exists when nothing is plugged in), or add `-primeoff` to boot-args to stop PrimeBridge.
+- Original NVRMFB: `sudo sh install-nvrmfb.sh NVRMFB-2.6.3-orig.kext`, then reboot.
+
+## Checking that it works
+
+Everything PrimeBridge does is logged to `/var/log/PrimeBridge.log`.
+
+```bash
+tail -40 /var/log/PrimeBridge.log
+ioreg -rc PrimeBridge -d1 | grep -E "Version|PrimeMode"
+```
+
+Expected sequence:
+
+```
+PrimeBridge 0.4.8 starting (log=1)
+FB 1920x1080 bpp 32 stride 7680 B ... phys 0x490000000 ... BAR0 0x490000000 +0x10000000
+found NVRMNVDAFramebuffer 1920x1080 pitch 7680 phys 0x...
+redirected NVRMNVDAFramebuffer scanout kva to cached staging (8294400 bytes)
+igpu probe: FB_OFFSET 0x00000440 FB_LOCATION 0x0000f400..0x0000f41f -> VRAM at phys 0x440000000, 512 MB; GOP at VRAM +0x0
+igpu probe: phys 0x440000000, 61440 px: 0 differ from what we wrote (61434 lit), ... -> MATCH
+igpu writes: PAT 0x... (PA6 WC)
+igpu writes: ns per row: BAR0 2004, BAR0 write-combined 2343, VRAM write-combined 1355 -> VRAM at phys, fast
+NVAccel now writes its frames straight into the panel's buffer (no staging copy, no diff)
+rate-hint: 20 Hz (idle), work avg 0 us ..., panel 143.78 Hz, direct
+```
+
+- `inconclusive (screen too dark)`: the probe retries on a later still screen; leave something bright on screen.
+- `PA6 not WC` and writes around 40 µs per row: the Fix PAT patch is still active.
+- No `found NVRMNVDAFramebuffer`: NVRMFB did not create head 0 (check `nvfbforce=1`, that nothing is plugged in, and that an HDMI connector exists on the NVIDIA GPU).
+- Useful NullMoth counters: `sysctl debug.nvaccel_iop_ok debug.nvaccel_surface_gpu_timeouts debug.nvaccel_iop_copy_skip`.
+
+## Adapting it to another laptop
+
+### Panel resolution (most likely change on a Lenovo)
+
+Direct mode needs the NVIDIA mode to equal the GOP framebuffer: same width, height and pitch (width x 4). The GOP usually runs the panel at its native resolution; the `FB ...` log line shows it. If it differs from 1920x1080, PrimeBridge stays in staging mode and copies only the top-left 1920x1080 (cropped, slower).
+
+The fix is a forced EDID with the panel's resolution, in `kForcedEdid[128]` in `nvrm-fb.cpp` (see `nvfbforce.patch`), then rebuild NVRMFB from NullMoth 2.6.3 sources.
+
+- The mode lives in the first detailed timing descriptor, bytes 54 to 71. Byte 127 is the checksum (all 128 bytes must sum to 0 mod 256). The range-limits descriptor (`00 00 00 fd`) must allow the new refresh and pixel clock.
+- Generate the EDID with a tool (for example an EDID editor or `cvt -r`/`cvt` timings typed into one) and check it with `edid-decode`. Do not hand-edit without recomputing the checksum.
+- Without an HDMI vendor block, NVKMS limits the pixel clock to about 165 MHz. 1920x1200 at 60 Hz with CVT reduced blanking is 154 MHz and fits. 2560x1600 at 60 Hz (about 268 MHz) does not fit: it would need a 256-byte EDID with a CTA-861 extension declaring HDMI with a max TMDS clock of at least 340 MHz, which the patch does not support as written (128-byte buffer) and nobody has tested.
+- After changing the mode, the log should show `found NVRMNVDAFramebuffer <W>x<H> pitch <W*4>` matching the `FB` line.
+
+### A different iGPU
+
+The register offsets in `PrimeBridge.cpp` (`kRegFbOffset`, `kRegOtg0*`) come from Linux amdgpu headers for Rembrandt: `yellow_carp_offset.h` (GC_BASE seg0 `0x1260`, DCN_BASE seg2 `0x34C0`), `gc_10_3_0_offset.h` and `dcn_3_1_2_offset.h`. For another APU (780M, 760M, Vega), the PCI ID in `Info.plist` and these offsets must change, taken from that chip's Linux headers. The `MATCH` comparison protects against a wrong address: PrimeBridge never writes to the VRAM address unless it read back exactly what it had written through BAR0.
+
+### Another NullMoth version
+
+The `0x2d8` (`fKva`), `0x2e0`, `0x2f0`, `0x2f4`, `0x2f8` offsets in `attachNvidiaScanout()` were read from the NVRMFB 2.6.3 binary. If NullMoth changes `NVRMNVDAFramebuffer`'s layout, `NVFBOffsetsVerified` in `ioreg` becomes false and PrimeBridge does not redirect. The `nvfbforce` patch also has to be re-applied to the new `nvrm-fb.cpp`.
+
+### PrimeBridge boot-args
+
+| Boot-arg | Effect |
+|---|---|
+| `-primeoff` | PrimeBridge does not load (escape hatch). |
+| `-primelogoff` | No log file. |
+| `primecarve=0` | Skip the VRAM probe and write benchmark (stays on BAR0, no direct mode). |
+| `primehz=N` | Staging timer rate (default 60, 24 to 240). |
+| `primefmt=N` | Pixel packing in staging mode: 1 = BGRX (default), 2 = RGBX, 3 = raw. Direct mode only runs with 1. |
+| `primetest=1/2/3`, `primecolors=1` | Test patterns on the panel during boot, for checking colors and stride. |
+
+### Building PrimeBridge
+
+On a Mac with the Command Line Tools (no Xcode needed):
+
+```bash
+cd PrimeBridge-source
+sh build.sh
+```
+
+`build.sh` expects the `MacOSX15.4.sdk` from the Command Line Tools; set `SDK=` to another SDK path if needed. Output: `build/PrimeBridge.kext` (ad-hoc signed). No floating point in kernel code: `otool -tV build/PrimeBridge.kext/Contents/MacOS/PrimeBridge | grep -cE "cvtsi2sd|divsd"` must print 0.
+
+## Known limits
+
+- **60 Hz content on a 144 Hz panel.** The fake HDMI monitor runs at 60 Hz, so each frame stays 2 or 3 panel refreshes and motion is slightly uneven. A forced EDID at half the panel rate (about 72 Hz, under 165 MHz) would give an even cadence; not done yet.
+- **NVAccel waits up to 100 ms** for a composite to finish before copying (`kSurfGpuWaitMs` in `nvrm-accel.cpp`). The test machine still sees a few of these per 10 minutes (`debug.nvaccel_surface_gpu_timeouts`), which show as short freezes.
+- **Tearing** is possible: the 680M scans out the same buffer NVAccel writes into (no double buffering).
+- **Sleep and wake are untested.**
+- **Resolution changes:** a smaller mode in System Settings shows top-left without scaling; a larger mode than the first one can overflow until the geometry check (about a second) catches it.
+- **The RTX stays powered all the time** (it renders the desktop), so battery life is limited.
+
+## For an AI assistant helping with this
+
+Read `PrimeBridge-source/src/PrimeBridge.cpp` first: `attachNvidiaScanout()` (redirect), `probeIgpu()` and `chooseWriteMapping()` (680M probe, write benchmark), `tickNullMoth()` (staging copy, geometry check, switch to direct mode). `BootFramebuffer.cpp` maps the GOP framebuffer (`attach()`, `mapWriteCombined()`). The NVIDIA side is `nvfbforce.patch` against NullMoth 2.6.3's `kexts/NVRMFB/fb/nvrm-fb.cpp`; the frame copy into `fKva` is `NVDisplayPipe::performTransaction` in NullMoth's `kexts/NVRM/accel/nvrm-accel.cpp`. Diagnose from `/var/log/PrimeBridge.log` and `ioreg -rc PrimeBridge` before changing code.
