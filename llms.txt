@@ -2,7 +2,7 @@
 
 PrimeBridge lets a hackintosh laptop without a MUX switch show the desktop on its internal screen while macOS renders on the NVIDIA GPU (NullMoth driver, Metal). The internal panel is wired only to the AMD iGPU, which has no macOS driver. PrimeBridge reuses the framebuffer the firmware (GOP) left on the iGPU and makes NullMoth's frames land in it.
 
-Tested on exactly one machine: Acer Nitro V 15 ANV15-41 (Ryzen 5 7535HS, Radeon 680M `0x1681`, RTX 4050 Laptop, 1920x1080 144 Hz panel), macOS 26.7.2, NullMoth 2.6.3, PrimeBridge 0.7.0 and 0.7.1 installed by `install.sh`: direct mode with the GPU copy engine, 72 Hz forced mode. The patch also builds for NullMoth 2.7.2 and 2.8.1, for macOS 15 and 26, which have not run on a laptop. Anything else is untested. Keep an HDMI monitor at hand for your first boots.
+PrimeBridge supports the 12 AMD iGPU PCI IDs listed under Requirements. Two laptops have run it, both with iGPU ID `0x1681`. The first is an Acer Nitro V 15 ANV15-41 (Ryzen 5 7535HS, RTX 4050 Laptop, 1920x1080 144 Hz panel), macOS 26.7.2, NullMoth 2.6.3, PrimeBridge 0.7.0 and 0.7.1 installed by `install.sh`: direct mode with the GPU copy engine, 72 Hz forced mode. The second has a Ryzen 7 6800H and an RTX 3050, and works correctly on PrimeBridge 0.4.8 (0.7.1 not tried yet). The patch also builds for NullMoth 2.7.2 and 2.8.1, for macOS 15 and 26, which have not run on a laptop. The other iGPU IDs have not run on a laptop either. Keep an HDMI monitor at hand for your first boots.
 
 ## What is in this repository
 
@@ -17,6 +17,7 @@ Tested on exactly one machine: Acer Nitro V 15 ANV15-41 (Ryzen 5 7535HS, Radeon 
 | `NVRMFB-patch/test_nvfbforce.py` | Static checks of the patched source and of the generated EDID. |
 | `install-nvrmfb.sh` | Installs NVRMFB and NVAccel if the installed NullMoth is the same version, keeps the originals, rebuilds the auxiliary kernel collection. |
 | `NVRMFB-patch/NullMoth-LICENSE`, `NullMoth-NOTICE` | NullMoth's license (PolyForm Noncommercial). The patched kexts are under it: noncommercial use only. |
+| `docs/` | The user documentation: install guide, troubleshooting, FAQ, compatibility, internals, development. |
 
 ## How it works
 
@@ -28,18 +29,18 @@ Tested on exactly one machine: Acer Nitro V 15 ANV15-41 (Ryzen 5 7535HS, Radeon 
 
 ### The data path
 
-1. With `nvfbforce=1`, NVRMFB reports the first HDMI connector of the NVIDIA GPU as connected when nothing is plugged in, with an EDID named "PrimeBridge" that `install.sh` makes for the panel (1920x1080 at 72 Hz, 160.85 MHz on the test machine). NVIDIA head 0 exists, WindowServer composites on the RTX with Metal, and NVAccel runs. DisplayPort cannot be faked this way because DP needs a real sink to train the link; HDMI does not.
+1. With `nvfbforce=1`, NVRMFB reports the first HDMI connector of the NVIDIA GPU as connected when nothing is plugged in, with an EDID named "PrimeBridge" that `install.sh` makes for the panel (1920x1080 at 72 Hz, 160.85 MHz on the test machine). NVIDIA head 0 exists, WindowServer composites on the NVIDIA GPU with Metal, and NVAccel runs. DisplayPort cannot be faked this way because DP needs a real sink to train the link; HDMI does not.
 2. For every frame, WindowServer's swap goes through `NVDisplayPipe::performTransaction` (in NullMoth's `nvrm-accel.cpp`). With zero-copy flips off (`debug.nvaccel_iop_flip=0`, which PrimeBridge enforces), stock NVAccel pages the frame out of VRAM, then copies it with the CPU into the scanout address NVRMFB gives it (`fKva`).
 3. PrimeBridge finds `NVRMNVDAFramebuffer` and calls `nvScanoutRedirect`, which the patch adds to NVRMFB. From then on `nvScanoutInfo` hands NVAccel PrimeBridge's buffer instead of NVRMFB's own.
 4. PrimeBridge starts in staging mode. The scanout points to a cached RAM buffer the size of NVRMFB's whole scanout allocation (`fMemBytes`, which the patched NVRMFB reports), so a later, larger mode still fits. A 60 Hz timer (20 Hz when idle) compares it row by row with a shadow copy, only after NVAccel's frame counter (`debug.nvaccel_iop_ok`) has moved, and writes changed rows to the GOP framebuffer.
 5. On the first timer tick without a new frame, a few seconds after the first frame reaches the panel, PrimeBridge probes the iGPU.
-   - On the 680M it maps the register BAR (BAR5).
-   - It reads `GCMC_VM_FB_OFFSET` to find the 680M's VRAM in system RAM (`0x440000000` on the test machine, 512 MB). Linux amdgpu accesses VRAM this way on every x86 APU.
+   - On ID `0x1681` (680M / 660M) it maps the register BAR (BAR5). The other IDs have no register map: they log `no register map here, BAR0 write benchmark only` and time only the two BAR0 mappings below.
+   - It reads `GCMC_VM_FB_OFFSET` to find the iGPU's VRAM in system RAM (`0x440000000` on the test machine, 512 MB). Linux amdgpu accesses VRAM this way on every x86 APU.
    - It writes 32 pixels through BAR0, reads them back from that RAM (after `clflush`, retrying for up to 10 ms), puts the old values back and logs `MATCH`. This works on a black screen too.
    - It times rewriting 64 identical rows (invisible) through three mappings: BAR0 as mapped at boot, BAR0 write-combined, and VRAM write-combined. It keeps the fastest.
-   - If writes are fast (under 3 µs per row), the NVIDIA mode has exactly the panel's width, height and pitch, and NVRMFB's allocation fits in the panel's mapping, it points the scanout straight at the panel's framebuffer. When that framebuffer is the 680M's VRAM in system RAM, it also hands NVRMFB its physical address, and the patched NVAccel has the RTX copy engine write each frame there by DMA, with no CPU copy. Frames whose newest pixels are not in VRAM still go through the CPU. The staging copy and the row diff drop out, and the PrimeBridge timer drops to 4 Hz to watch the geometry. The log says `direct` and `PrimeMode` becomes `direct-copy-engine` (`direct-kva` when the panel's buffer is in BAR0).
+   - If writes are fast (under 3 µs per row), the NVIDIA mode has exactly the panel's width, height and pitch, and NVRMFB's allocation fits in the panel's mapping, it points the scanout straight at the panel's framebuffer. When that framebuffer is the iGPU's VRAM in system RAM, which only ID `0x1681` can find, it also hands NVRMFB its physical address, and the patched NVAccel has the NVIDIA copy engine write each frame there by DMA, with no CPU copy. Frames whose newest pixels are not in VRAM still go through the CPU. The staging copy and the row diff drop out, and the PrimeBridge timer drops to 4 Hz to watch the geometry. The log says `direct` and `PrimeMode` becomes `direct-copy-engine` (`direct-kva` when the panel's buffer is in BAR0, where NVAccel keeps copying with the CPU).
 6. Every 64 timer ticks (every tick in direct mode) PrimeBridge re-reads the NVIDIA scanout geometry. On a change (resolution switch) it asks NVRMFB to take its own buffer back and falls back to staging, then goes direct again when the geometry matches.
-7. On the 680M, PrimeBridge also reads the OTG frame counter and logs the panel's real refresh rate on every `rate-hint` line.
+7. On ID `0x1681`, PrimeBridge also reads the OTG frame counter and logs the panel's real refresh rate on every `rate-hint` line.
 
 ### Why the "Fix PAT" OpenCore patch must be off
 
@@ -50,7 +51,7 @@ On the test machine, measured per 7680-byte row:
 | | Fix PAT on | Fix PAT off |
 |---|---|---|
 | BAR0 | 39.7 µs | 2.0 µs |
-| 680M VRAM, write-combined | 75.4 µs | 1.4 µs (about 5.7 GB/s) |
+| iGPU VRAM, write-combined | 75.4 µs | 1.4 µs (about 5.7 GB/s) |
 | Result | staging mode, `kernel_task` 75 % in video | direct mode, `kernel_task` 2.5 % |
 
 AMD Vanilla's README says the patch does not improve performance and that some systems run better without it. Test without it on a USB stick first.
@@ -84,7 +85,7 @@ Then approve the extensions in System Settings > Privacy & Security if macOS ask
 
 When detection fails, give it what it could not find: `--panel 1920x1080`, `--panel-hz 144` or `--efi disk0s1`.
 
-The forced HDMI mode runs at a whole divisor of the panel's refresh rate (72 Hz on a 144 Hz panel). On a first install PrimeBridge has not measured the panel yet, so the mode is 60 Hz. After the restart, `./doctor.sh` says when running `./install.sh` again gives a better rate.
+The forced HDMI mode runs at a whole divisor of the panel's refresh rate (72 Hz on a 144 Hz panel). On a first install PrimeBridge has not measured the panel yet, so the mode is 60 Hz. On ID `0x1681`, PrimeBridge measures the panel, and after the restart `./doctor.sh` says when running `./install.sh` again gives a better rate. The other iGPUs cannot measure it, so pass `--panel-hz` when the panel is not 60 Hz.
 
 `nvfb=1 nvaccel=1` belong to NullMoth, which needs its own boot-args too (see its docs). `nvfbforce=1` creates the fake HDMI monitor. `nvcursor=0` turns off the NVIDIA hardware cursor, so macOS draws the cursor into the frame and it shows on the panel.
 
@@ -135,11 +136,11 @@ rate-hint: 4 Hz (idle), work avg 0 us ..., panel 143.78 Hz, direct
 
 ### Panel resolution
 
-Direct mode needs the NVIDIA mode to equal the GOP framebuffer: same width, height and pitch (width x 4). `install.sh` makes the forced EDID from the panel's resolution (`NVRMFB-patch/gen_edid.py`, CVT reduced blanking v2), and the pitch matches for the usual widths. Above 165 MHz the EDID gets a CTA-861 block that declares HDMI up to 340 MHz, and a mode that would need more gets a lower divisor of the panel's rate (a 4K panel gets 30 Hz). Only 1920x1080 has run on a laptop so far.
+Direct mode needs the NVIDIA mode to equal the GOP framebuffer: same width, height and pitch (width x 4). `install.sh` makes the forced EDID from the panel's resolution (`NVRMFB-patch/gen_edid.py`, CVT reduced blanking v2), and the pitch matches for the usual widths. Above 165 MHz the EDID gets a CTA-861 block that declares HDMI up to 340 MHz, and a mode that would need more gets a lower divisor of the panel's rate (a 60 Hz 4K panel gets 30 Hz). Only 1920x1080 has run on a laptop so far.
 
 ### A different iGPU
 
-The GOP framebuffer path is the same on every iGPU PrimeBridge matches. Only the optional VRAM probe and the panel refresh readout use registers, taken from the Linux amdgpu headers for Rembrandt (`yellow_carp_offset.h`, `gc_10_3_0_offset.h`, `dcn_3_1_2_offset.h`), so they run on the 680M only. The other iGPUs time BAR0 writes instead, and go direct when BAR0 write-combined is fast enough. For an AMD iGPU that is not listed, add its ID to `IOPCIPrimaryMatch` in `Info.plist`. PrimeBridge never writes to the VRAM address unless it read back exactly what it had written through BAR0.
+The GOP framebuffer path is the same on every iGPU PrimeBridge matches. Only the optional VRAM probe and the panel refresh readout use registers, taken from the Linux amdgpu headers for Rembrandt (`yellow_carp_offset.h`, `gc_10_3_0_offset.h`, `dcn_3_1_2_offset.h`), so they run on ID `0x1681` only. The other iGPUs time BAR0 writes instead, and go direct when BAR0 write-combined is fast enough. For an AMD iGPU that is not listed, add its ID to `IOPCIPrimaryMatch` in `Info.plist`. PrimeBridge never writes to the VRAM address unless it read back exactly what it had written through BAR0.
 
 ### Another NullMoth version
 
@@ -161,7 +162,7 @@ NullMoth builds a different NVAccel for macOS 15 and 26: the script builds for t
 |---|---|
 | `-primeoff` | PrimeBridge does not load (escape hatch). |
 | `-primelogoff` | No log file. |
-| `primecarve=0` | Skip the VRAM probe and write benchmark (stays on BAR0, no direct mode). |
+| `primecarve=0` | Skip the write benchmark (stays on BAR0 as mapped at boot, no direct mode). |
 | `primehz=N` | Staging timer rate (default 60, 24 to 240). |
 | `primefmt=N` | Pixel packing in staging mode: 1 = BGRX (default), 2 = RGBX, 3 = raw. Direct mode only runs with 1. |
 | `primemirror=1` | Copy each frame to a monitor plugged into the NVIDIA GPU too (staging mode only). On by itself when such a monitor was there at boot. |
@@ -187,10 +188,10 @@ sh build.sh
 - NVAccel waits up to 100 ms for a composite to finish before copying (`kSurfGpuWaitMs` in `nvrm-accel.cpp`). The test machine still sees a few of these per 10 minutes (`debug.nvaccel_surface_gpu_timeouts`), which show as short freezes.
 - Tearing is possible: the iGPU scans out the same buffer NVAccel writes into (no double buffering).
 - Sleep and wake are untested.
-- Only the 680M has been tested. NullMoth's opt-in AMD and Intel test driver (NMDRM) attaches to the same iGPU and has not been tried with PrimeBridge.
+- Only iGPU ID `0x1681` (680M / 660M) has run on a laptop. NullMoth's opt-in AMD and Intel test driver (NMDRM) attaches to the same iGPU and has not been tried with PrimeBridge.
 - A smaller mode in System Settings shows top-left without scaling.
-- The RTX stays powered all the time because it renders the desktop, so battery life is limited.
+- The NVIDIA GPU stays powered all the time because it renders the desktop, so battery life is limited.
 
 ## For an AI assistant helping with this
 
-Read `PrimeBridge-source/src/PrimeBridge.cpp` first: `attachNvidiaScanout()` (redirect), `probeIgpu()` and `chooseWriteMapping()` (680M probe, write benchmark), `tickNullMoth()` (staging copy, geometry check, switch to direct mode). `BootFramebuffer.cpp` maps the GOP framebuffer (`attach()`, `mapWriteCombined()`). The NVIDIA side is `nvfbforce.patch` (tags v2.6.3 to v2.8.1): the forced HDMI display and `nvScanoutRedirect` in `kexts/NVRMFB/fb/nvrm-fb.cpp`, and `nvAccelIopToPanel`, the copy engine path of `NVDisplayPipe::performTransaction`, in `kexts/NVRM/accel/nvrm-accel.cpp`. The installer is `primebridge.py`: `detect()` (what it checks and where it reads it), `install()` (build, OpenCore edit, kexts, state), `doctor()`, `uninstall()`. Its state lives in `/Library/PrimeBridge`: the original kexts (`<name>-<version>-orig.kext`), every `config.plist` it replaced, `nullmoth-version`, `forced-mode`, `added-boot-args` and `disabled-patches`. Diagnose with `./doctor.sh`, `/var/log/PrimeBridge.log` and `ioreg -rc PrimeBridge` before changing code.
+Read `PrimeBridge-source/src/PrimeBridge.cpp` first: `attachNvidiaScanout()` (redirect), `probeIgpu()` and `chooseWriteMapping()` (iGPU probe, write benchmark), `tickNullMoth()` (staging copy, geometry check, switch to direct mode). `BootFramebuffer.cpp` maps the GOP framebuffer (`attach()`, `mapWriteCombined()`). The NVIDIA side is `nvfbforce.patch` (tags v2.6.3 to v2.8.1): the forced HDMI display and `nvScanoutRedirect` in `kexts/NVRMFB/fb/nvrm-fb.cpp`, and `nvAccelIopToPanel`, the copy engine path of `NVDisplayPipe::performTransaction`, in `kexts/NVRM/accel/nvrm-accel.cpp`. The installer is `primebridge.py`: `detect()` (what it checks and where it reads it), `install()` (build, OpenCore edit, kexts, state), `doctor()`, `uninstall()`. Its state lives in `/Library/PrimeBridge`: the original kexts (`<name>-<version>-orig.kext`), every `config.plist` it replaced, `nullmoth-version`, `forced-mode`, `added-boot-args` and `disabled-patches`. Diagnose with `./doctor.sh`, `/var/log/PrimeBridge.log` and `ioreg -rc PrimeBridge` before changing code.
