@@ -37,7 +37,7 @@ Version 0.7.1 installs with one command: `./install.sh` finds the NullMoth versi
 | Panel | 1920x1080, 144 Hz |
 | Software | macOS 26.7.2, NullMoth 2.6.3 |
 
-No other laptop has been tested yet.
+It also works correctly on a second laptop, with a Ryzen 7 6800H and an RTX 3050. That one ran PrimeBridge 0.4.8 and has not tried 0.7.1 yet.
 
 > [!NOTE]
 > PrimeBridge is still a work in progress, and the optimization is not the best yet.
