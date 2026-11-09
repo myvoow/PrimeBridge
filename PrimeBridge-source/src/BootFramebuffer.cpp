@@ -4,34 +4,26 @@
 #include <pexpert/pexpert.h>
 #include <string.h>
 
-// Pixel packing. The source is macOS 32BGRA (byte0=B byte1=G byte2=R byte3=A=0xFF).
-// The AMD Rembrandt GOP is standard BGRX8888 (byte0=B byte1=G byte2=R byte3=X),
-// the same order macOS writes. fmt=1 (default) zeroes the reserved byte.
-// fmt=4 was previously "calibrated" against a one-byte-shifted base address and
-// is kept only as a comparison option, not a correct packing.
 static inline uint32_t packPixel(uint32_t p, uint32_t fmt) {
     const uint32_t b = p & 0xFFu;
     const uint32_t g = (p >> 8) & 0xFFu;
     const uint32_t r = (p >> 16) & 0xFFu;
     switch (fmt) {
     case 1:
-        // 8-bit BGRX8888 (byte3 forced 0). Normal GOP order, matches macOS BGRA.
         return p & 0x00FFFFFFu;
     case 2:
-        // 8-bit RGBX8888 (R/B swapped, byte3 forced 0).
         return (b << 16) | (g << 8) | r;
     case 4:
-        // Comparison-only: G/B swapped. Was "calibrated" against a base address
-        // shifted by one byte (flag bits), so its "crossbar" was an artefact.
         return (r << 16) | (b << 8) | g;
     case 0:
-        // Legacy "Mirrored Blue" (v0.3.1): byte0=B, byte1=G, byte2=R, byte3=B.
         return (p & 0x00FFFFFFu) | (b << 24);
-    default: // case 3 and anything else
-        // Raw 32BGRA passthrough (v0.2.0 behavior).
+    default:
         return p;
     }
 }
+
+static constexpr uint64_t round64K(uint64_t n) { return (n + 0xFFFFULL) & ~0xFFFFULL; }
+static_assert(round64K(7680ULL * 1080) == 8323072, "1920x1080: NVRMFB allocates 8323072 B, the GOP mapping must hold it");
 
 bool BootFramebuffer::attach(IOPCIDevice *igpu) {
     PE_Video v {};
@@ -39,7 +31,6 @@ bool BootFramebuffer::attach(IOPCIDevice *igpu) {
         IOLog("PrimeBridge: getConsoleInfo failed\n");
         return false;
     }
-    // Log the raw values first, so a refusal below can still be diagnosed.
     v.v_pixelFormat[sizeof(v.v_pixelFormat) - 1] = 0;
     IOLog("PrimeBridge: console base 0x%llx %lux%lu depth %lu rowBytes %lu display %lu "
           "fmt '%s' offset %lu length %lu rotate %u scale %u\n",
@@ -47,19 +38,12 @@ bool BootFramebuffer::attach(IOPCIDevice *igpu) {
           v.v_display, v.v_pixelFormat, v.v_offset, v.v_length,
           (unsigned)v.v_rotate, (unsigned)v.v_scale);
     depth_ = (uint32_t)v.v_depth;
-    // Refuse anything but 32 bpp: all blit paths write 8 bits per channel.
     if (v.v_depth != 32) {
         IOLog("PrimeBridge: refusing GOP depth %lu (only 32 bpp supported)\n", v.v_depth);
         return false;
     }
     if (!v.v_baseAddr || !v.v_width || !v.v_height) return false;
 
-    // CRITICAL: v_baseAddr bit 0 is a flag (XNU: "unless b0 is set to indicate
-    // physical"). Mask it and the rest of the low bits off like XNU does:
-    //   new_vinfo.v_physaddr = boot_vinfo->v_baseAddr & ~3UL;
-    // A base shifted by one byte recolours every pixel (R'=G, G'=B, B'=garbage),
-    // which manifestly cannot be fixed by any channel packing. Mask with ~3ULL,
-    // NOT ~0xFFF (the page-alignment mask from RDNA4FB was wrong for this flag).
     const uint64_t rawBase = (uint64_t)v.v_baseAddr;
     const uint64_t flags   = rawBase & 3ULL;
     phys_ = rawBase & ~3ULL;
@@ -67,9 +51,6 @@ bool BootFramebuffer::attach(IOPCIDevice *igpu) {
     IOLog("PrimeBridge: v_baseAddr raw 0x%llx -> masked 0x%llx (flag bits 0x%llx)%s\n",
           rawBase, phys_, flags, flags ? "  *** FLAG BITS PRESENT ***" : "");
     if (phys_ & 0xFFFULL) {
-        // Should not happen: the scanout base is expected page-aligned. Log, but
-        // keep the value rather than masking further (masking more would re-shift
-        // the aperture like the original bug).
         IOLog("PrimeBridge: WARNING masked base 0x%llx is not 4K-aligned\n", phys_);
     }
 
@@ -82,8 +63,6 @@ bool BootFramebuffer::attach(IOPCIDevice *igpu) {
     }
     const uint64_t len = (uint64_t)stride_ * height_;
 
-    // Guard: on an APU the GOP framebuffer must lie inside the iGPU's BAR0.
-    // Otherwise refuse, rather than write to arbitrary memory.
     IODeviceMemory *bar0 = igpu->getDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
     if (!bar0) { IOLog("PrimeBridge: iGPU has no BAR0\n"); return false; }
     bar0_ = bar0->getPhysicalAddress(); bar0Len_ = bar0->getLength();
@@ -91,18 +70,18 @@ bool BootFramebuffer::attach(IOPCIDevice *igpu) {
         IOLog("PrimeBridge: GOP 0x%llx outside BAR0 [0x%llx +0x%llx]\n", phys_, bar0_, bar0Len_);
         return false;
     }
+    mapLen_ = round64K(len);
+    if (phys_ + mapLen_ > bar0_ + bar0Len_) mapLen_ = bar0_ + bar0Len_ - phys_;
     map_ = bar0->createMappingInTask(kernel_task, 0,
-              kIOMapAnywhere | kIOMapWriteCombineCache, phys_ - bar0_, len);
+              kIOMapAnywhere | kIOMapWriteCombineCache, phys_ - bar0_, mapLen_);
     if (!map_) { IOLog("PrimeBridge: mapping failed\n"); return false; }
     base_ = reinterpret_cast<uint8_t *>(map_->getVirtualAddress());
     return true;
 }
 
 bool BootFramebuffer::mapWriteCombined(uint64_t phys) {
-    // XNU fixes a physical range's cache mode when its descriptor is created and defaults unmanaged memory
-    // to uncached; kIOMapWriteCombineCache at map time alone left both BAR0 and the VRAM at 120-260 MB/s.
-    const IOOptionBits kCacheShift = 28;   // kIOMemoryBufferCacheShift, XNU_KERNEL_PRIVATE in IOMemoryDescriptor.h
-    IOMemoryDescriptor *md = IOMemoryDescriptor::withAddressRange(phys, (uint64_t)stride_ * height_,
+    const IOOptionBits kCacheShift = 28;
+    IOMemoryDescriptor *md = IOMemoryDescriptor::withAddressRange(phys, mapLen_,
         kIODirectionInOut | kIOMemoryMapperNone | (kIOWriteCombineCache << kCacheShift), TASK_NULL);
     IOMemoryMap *m = md ? md->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapWriteCombineCache) : nullptr;
     if (md) md->release();
@@ -120,7 +99,6 @@ void BootFramebuffer::detach() {
 void BootFramebuffer::drawTestPattern(uint32_t mode, uint32_t fmt) {
     if (!base_) return;
     if (mode == 2) { drawDiagnostic(fmt); return; }
-    // Expected left to right: white, yellow, cyan, green, magenta, red, blue, black.
     static const uint32_t bars[8] = { 0xFFFFFF, 0xFFFF00, 0x00FFFF, 0x00FF00,
                                       0xFF00FF, 0xFF0000, 0x0000FF, 0x000000 };
     for (uint32_t y = 0; y < height_; y++) {
@@ -164,8 +142,6 @@ void BootFramebuffer::drawCalibration(uint32_t stage) {
                 row[x * 4 + 2] = (p >> 16) & 0xFF;
                 row[x * 4 + 3] = (p >> 24) & 0xFF;
             } else {
-                // stage 5: 1-pixel checkerboard. A wrong stride desynchronises the
-                // next row and shows up as vertical stripes / diagonal ghosting.
                 const uint8_t on = ((x ^ y) & 1) ? 0xFF : 0x00;
                 row[x * 4 + 0] = on;
                 row[x * 4 + 1] = on;
@@ -196,11 +172,9 @@ void BootFramebuffer::blitRow(uint32_t y, const uint32_t *srcRow, uint32_t w, ui
     if (w > width_) w = width_;
     uint32_t *dstRow = reinterpret_cast<uint32_t *>(base_ + (uint64_t)y * stride_);
 
-    // Fast path: pack 2 pixels per 64-bit store into Write-Combining BAR0 memory.
     uint64_t *dst64 = reinterpret_cast<uint64_t *>(dstRow);
     const uint32_t pairs = w >> 1;
     if (fmt == 3) {
-        // Raw passthrough: no per-pixel transform.
         for (uint32_t i = 0; i < pairs; i++) {
             dst64[i] = (uint64_t)srcRow[i * 2] | ((uint64_t)srcRow[i * 2 + 1] << 32);
         }

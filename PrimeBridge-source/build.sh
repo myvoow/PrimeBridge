@@ -1,8 +1,7 @@
 #!/bin/sh
-# Builds PrimeBridge.kext with the Command Line Tools (no Xcode needed).
 set -e
 cd "$(dirname "$0")"
-SDK=${SDK:-/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk}
+SDK=${SDK:-$(xcrun --show-sdk-path)}
 K=$SDK/System/Library/Frameworks/Kernel.framework
 OUT=build/PrimeBridge.kext
 rm -rf build; mkdir -p $OUT/Contents/MacOS

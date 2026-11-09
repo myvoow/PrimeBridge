@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Thanks for testing. Reports from laptops other than the Acer Nitro V 15 ANV15-41 are the most useful, even when nothing works.
-        Leave a still, bright desktop on screen for about a minute after login before collecting the log.
+        Wait a minute after login before collecting the log.
   - type: input
     id: laptop
     attributes:
@@ -40,17 +40,14 @@ body:
     id: versions
     attributes:
       label: macOS, NullMoth and PrimeBridge versions
-      placeholder: macOS 26.7.2, NullMoth 2.6.3, PrimeBridge 0.4.8
+      placeholder: macOS 26.7.2, NullMoth 2.8.1, PrimeBridge 0.7.1
     validations:
       required: true
-  - type: dropdown
-    id: fixpat
+  - type: textarea
+    id: install
     attributes:
-      label: Is the "Fix PAT" kernel patch disabled?
-      options:
-        - "Yes, disabled"
-        - "No, still enabled"
-        - "Not sure"
+      label: Output of `./install.sh --dry-run` and `./doctor.sh`
+      render: text
     validations:
       required: true
   - type: dropdown

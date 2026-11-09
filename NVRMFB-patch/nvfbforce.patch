@@ -1,24 +1,111 @@
+diff --git a/kexts/NVRM/accel/nvrm-accel.cpp b/kexts/NVRM/accel/nvrm-accel.cpp
+index 71f8c1f..54795a1 100644
+--- a/kexts/NVRM/accel/nvrm-accel.cpp
++++ b/kexts/NVRM/accel/nvrm-accel.cpp
+@@ -1294,6 +1294,7 @@ bool NVDisplayPipe::isTransactionComplete(IOAccelDisplayPipeTransaction2 *)
+ 
+ static void nvAccelSurfScanoutSync(IOSurface *s);
+ static bool nvAccelSurfCopyReady(IOSurface *s, unsigned head);
++static bool nvAccelIopToPanel(NVAccel *a, IOService *fb, unsigned head, IOSurface *s);
+ static bool nvAccelIopFlip(IOService *fb, unsigned head, IOSurface *s, void *pipe);
+ static bool nvSurfWaitReady(unsigned int id);
+ static void nvAccelIopHome(IOService *fb, unsigned head);
+@@ -1342,6 +1343,7 @@ IOReturn NVDisplayPipe::performTransaction(IOAccelDisplayPipeTransaction2 *txn)
+         // (1.13-1.14.1), nvaccel_iop_blank about half of every copied frame, never on machines whose frames all flip.
+         // Such a frame now keeps the previous picture on the panel instead.
+         nvSurfWaitReady(s->getSurfaceID());   // a copied frame is read here, so its GPU work must be done first
++        if (nvAccelIopToPanel(a, fb, head, s)) return kIOReturnSuccess;
+         if (!nvAccelSurfCopyReady(s, head)) return kIOReturnSuccess;
+         const unsigned fmt = s->getPixelFormat();
+         if (fmt != 0x42475241u) NVIOP_FAIL(kIOReturnUnsupported, "surface 0x%x format 0x%08x is not BGRA", s->getSurfaceID(), fmt);
+@@ -2352,6 +2354,55 @@ static bool nvAccelSurfCopyReady(IOSurface *s, unsigned head)
+     return false;
+ }
+ 
++static bool nvAccelIopToPanel(NVAccel *a, IOService *fb, unsigned head, IOSurface *s)
++{
++    struct NVRMVramRequest q;
++    nvSVZero(&q, sizeof q);
++    q.version = NVRM_VRAM_ABI_VERSION;
++    if (a->askFramebufferForScanout(&q, fb) != kIOReturnSuccess || !(q.flags & NVRM_SCANOUT_FLAG_SYSPHYS) || !q.size) return false;
++    const unsigned id = _ZNK9IOSurface12getSurfaceIDEv((void *)s);
++    if (s->getPixelFormat() != 0x42475241u || s->getWidth() != q.width || s->getHeight() != q.height ||
++        s->getBytesPerRow() != q.pitch || !nvSVPend(id, 2)) return false;
++    struct NVRMRmHandles h; nvSVZero(&h, sizeof h);
++    if (!nvAccelRmHandles(&h)) return false;
++    bool locked = false;
++    for (unsigned i = 0; i < 8 && !(locked = nvFamLock(a, true)); i++) IOSleep(1);
++    if (!locked) return false;
++    void *cache = _ZN22IOGraphicsAccelerator223deviceCacheForIOSurfaceEP9IOSurfacej((void *)a, (void *)s, 0);
++    OSObject *ctx = cache ? *(OSObject *volatile *)((unsigned char *)cache + 0x20) : nullptr;
++    NVResource *res = OSDynamicCast(NVResource, ctx);
++    volatile unsigned short *valid = res ? *(unsigned short *volatile *)((volatile unsigned char *)res + 0x30) : nullptr;
++    NVVidMemory *vm = res ? nvres_vidmem(res) : nullptr;
++    const unsigned long long len = (unsigned long long)q.pitch * q.height, pages = (len + 4095) >> 12;
++    bool ok = false;
++    if (valid && !(valid[0] & 1u) && nvAccelResPluginWrote(res) && vm && vm->fRmHandle && !vm->fScanout && vm->fBytes >= len) {
++        unsigned long long *pa = (unsigned long long *)IOMalloc(pages * sizeof *pa);
++        IOService *nvrm = nvAccelNVRM();
++        const OSSymbol *sym = OSSymbol::withCStringNoCopy(NVRM_SS_FN_PAGEOFF);
++        if (pa && nvrm && sym) {
++            for (unsigned long long k = 0; k < pages; k++) pa[k] = q.size + k * 4096;
++            struct NVRMSurfPageoff p; nvSVZero(&p, sizeof p);
++            p.version = NVRM_SS_RM_VERSION; p.status = NVRM_SS_OFF; p.kapiDevice = h.kapiDevice; p.kapiMemory = vm->fRmHandle;
++            p.pages = pa; p.pageCount = pages; p.length = len;
++            nvAccelIopHome(fb, head);
++            nvrm->callPlatformFunction(sym, false, &p, nullptr, nullptr, nullptr);
++            ok = p.status == 0;
++        }
++        if (sym) sym->release();
++        if (pa) IOFree(pa, pages * sizeof *pa);
++    }
++    if (cache) ((OSObject *)cache)->release();
++    nvFamUnlock(a);
++    if (!ok) return false;
++    OSAddAtomic64(1, &gCntIopSrcSurf); OSAddAtomic64(1, &gCntIopOk); OSAddAtomic64(1, &gCntIopOkHead[head]);
++    static SInt32 gIopCeLogs;
++    if (gIopCeLogs < 3) {
++        OSIncrementAtomic(&gIopCeLogs);
++        ALOG("iop: %ux%u frame to the panel by the copy engine, phys 0x%llx, %llu B", q.width, q.height, q.size, len);
++    }
++    return true;
++}
++
+ static unsigned nvVaAllocLogged, nvVaMapLogged;
+ 
+ static unsigned long long nvAccelGpuVaAlloc(IOAccelMemoryMap *map,
+diff --git a/kexts/NVRM/nvrm_vram_abi.h b/kexts/NVRM/nvrm_vram_abi.h
+index 430fcb4..0055c69 100644
+--- a/kexts/NVRM/nvrm_vram_abi.h
++++ b/kexts/NVRM/nvrm_vram_abi.h
+@@ -11,6 +11,8 @@
+ #define NVRM_VRAM_FN_FREE     "nvFreeVram"
+ 
+ #define NVRM_VRAM_FN_SCANOUT  "nvScanoutInfo"
++#define NVRM_VRAM_FN_REDIRECT "nvScanoutRedirect"
++#define NVRM_SCANOUT_FLAG_SYSPHYS 1u
+ 
+ #define NVRM_VRAM_BAR1_BUDGET (192ull * 1024ull * 1024ull)
+ 
 diff --git a/kexts/NVRMFB/fb/nvrm-fb.cpp b/kexts/NVRMFB/fb/nvrm-fb.cpp
-index 1f4657a..c0d473c 100644
+index 51b8110..6201404 100644
 --- a/kexts/NVRMFB/fb/nvrm-fb.cpp
 +++ b/kexts/NVRMFB/fb/nvrm-fb.cpp
-@@ -662,6 +662,26 @@ static NvU32 nvrmQueryHdaConnectorType(struct NvKmsKapiFunctionsTable *kms, stru
+@@ -342,6 +342,7 @@ class NVRMNVDAFramebuffer : public IOFramebuffer {
+     bool fHaveKmsMode = false;
+     struct NvKmsKapiMemory *fMem = nullptr; struct NvKmsKapiSurface *fSurf = nullptr;
+     void *fKva = nullptr; NvU64 fPhys = 0, fSize = 0; NvU32 fPitch = 0, fW = 0, fH = 0;
++    void *fKvaOwn = nullptr; NvU64 fRedirPhys = 0;
+     NvU64 fScanLogPhys = 0; NvU32 fScanLogW = 0, fScanLogH = 0, fScanLogPitch = 0;  // last nvScanoutInfo answer logged
+     IODeviceMemory *fConsMem = nullptr; IOMemoryMap *fConsMap = nullptr;
+     void *fConsKva = nullptr; NvU64 fConsPhys = 0, fConsSize = 0; NvU32 fConsPitch = 0;
+@@ -662,6 +663,16 @@ static NvU32 nvrmQueryHdaConnectorType(struct NvKmsKapiFunctionsTable *kms, stru
  }
  static struct NvKmsKapiDevice *gDev;
  static struct nvrm_dpy_rec gDpy[NVKMS_KAPI_MAX_CONNECTORS * 2];
-+// nvfbforce=1 (laptop whose panel is on another GPU, nothing plugged into this card): one HDMI connector is reported
-+// connected with this EDID, so head 0 exists, WindowServer composites on this GPU, and PrimeBridge copies it to the panel.
-+// NVKMS honours forceConnected only on the query that carries it, so every query of that display carries it.
 +static NvKmsKapiDisplay gForcedDpy = 0;
-+static const NvU8 kForcedEdid[128] = {   // "PrimeBridge", 1920x1080 CEA 60 Hz (148.5 MHz: no HDMI extension needed)
-+    0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x3a, 0xac, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
-+    0x14, 0x20, 0x01, 0x04, 0xa5, 0x22, 0x13, 0x78, 0x0e, 0xee, 0x91, 0xa3, 0x54, 0x4c, 0x99, 0x26,
-+    0x0f, 0x50, 0x54, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
-+    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x02, 0x3a, 0x80, 0x18, 0x71, 0x38, 0x2d, 0x40, 0x58, 0x2c,
-+    0x45, 0x00, 0x58, 0xc1, 0x10, 0x00, 0x00, 0x1e, 0x00, 0x00, 0x00, 0xfc, 0x00, 0x50, 0x72, 0x69,
-+    0x6d, 0x65, 0x42, 0x72, 0x69, 0x64, 0x67, 0x65, 0x0a, 0x20, 0x00, 0x00, 0x00, 0xfd, 0x00, 0x30,
-+    0x90, 0x1e, 0xa0, 0x1e, 0x00, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x00, 0x00, 0x00, 0x10,
-+    0x00, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x00, 0xdb,
++static const NvU8 kForcedEdid[] = {
++#include "nvfbforce_edid.inc"
 +};
 +static void nvrmForce(struct NvKmsKapiDynamicDisplayParams *dd)
 +{
@@ -29,7 +116,7 @@ index 1f4657a..c0d473c 100644
  static int gNDpy = -1;
  // How many displays the boot enumeration found. A framebuffer whose display index is >= this exists because a display
  // appeared after boot (hotplugFire adds it to gDpy and re-registers the idle nub), and that instance is the one that
-@@ -928,8 +948,18 @@ bool NVRMNVDAFramebuffer::kapiInit()
+@@ -928,8 +939,17 @@ bool NVRMNVDAFramebuffer::kapiInit()
          struct NvKmsKapiDynamicDisplayParams *dd = (struct NvKmsKapiDynamicDisplayParams *)IOMalloc(sizeof *dd);
          if (!dd) return false;
          gNDpy = 0;
@@ -37,7 +124,6 @@ index 1f4657a..c0d473c 100644
 -            nvu_zero(dd, sizeof *dd); dd->handle = handles[i];
 +        uint32_t force = 0;
 +        PE_parse_boot_argn("nvfbforce", &force, sizeof force);
-+        // pass 1 (nvfbforce=1 and pass 0 found nothing): force the first HDMI connector; DP would need a sink to train
 +        for (int pass = 0; pass < (force ? 2 : 1) && gNDpy == 0; pass++)
 +        for (NvU32 i = 0; i < n && !(pass && gNDpy); i++) {
 +            if (pass) {
@@ -50,18 +136,22 @@ index 1f4657a..c0d473c 100644
              if (!fKms->getDynamicDisplayInfo(fDev, dd)) {
                  FBLOG("dpy %u/%u 0x%x: getDynamicDisplayInfo FAILED", i, n, handles[i]);
                  continue;
-@@ -950,6 +980,10 @@ bool NVRMNVDAFramebuffer::kapiInit()
+@@ -950,6 +970,14 @@ bool NVRMNVDAFramebuffer::kapiInit()
              nvu_copy(r->edid, dd->edid.buffer, r->edidSize);
          }
          IOFree(dd, sizeof *dd);
-+        if (!gNDpy) gForcedDpy = 0;   // no HDMI connector took the force: never force one later
-+        if (gForcedDpy)
-+            FBLOG("nvfbforce: nothing plugged in -- HDMI display 0x%x forced connected (EDID \"PrimeBridge\" 1920x1080@60)",
-+                  gForcedDpy);
++        const char *why = !force ? "off" : !gNDpy ? (gForcedDpy ? "refused" : "no-hdmi") : gForcedDpy ? "forced" : "monitor";
++        if (!gNDpy) gForcedDpy = 0;
++        FBLOG("nvfbforce: %s (HDMI display 0x%x, EDID \"PrimeBridge\" %ux%u)", why, gForcedDpy,
++              kForcedEdid[56] | (kForcedEdid[58] >> 4) << 8, kForcedEdid[59] | (kForcedEdid[61] >> 4) << 8);
++        for (IOService *p = getProvider(); p; p = p->getProvider())
++            if (!strcmp(p->getMetaClass()->getClassName(), "NVRM")) {
++                p->setProperty("nvfbforce-display", (unsigned long long)gForcedDpy, 32); p->setProperty("nvfbforce", why); break;
++            }
          if (getProvider()) getProvider()->setProperty("connected-displays", (unsigned long long)gNDpy, 32);
          FBLOG("ENUMERATED: %d connected display(s) of %u handle(s), %u heads available",
                gNDpy, n, fNumHeads);
-@@ -1554,7 +1588,7 @@ void NVRMNVDAFramebuffer::hotplugFire(thread_call_param_t, thread_call_param_t)
+@@ -1554,7 +1582,7 @@ void NVRMNVDAFramebuffer::hotplugFire(thread_call_param_t, thread_call_param_t)
      for (NvU32 i = 0; i < n; i++) {
          bool known = false; int kdpy = -1;
          for (int k = 0; k < gNDpy; k++) if (gDpy[k].handle == handles[i]) { known = true; kdpy = k; break; }
@@ -70,7 +160,7 @@ index 1f4657a..c0d473c 100644
          bool dynOk = me->fKms->getDynamicDisplayInfo(me->fDev, dd);
          if (known) {
              // 1401/driver issue #110: switching the monitor to another input and back left it with no picture. The link
-@@ -1629,7 +1663,7 @@ void NVRMNVDAFramebuffer::hotplugFire(thread_call_param_t, thread_call_param_t)
+@@ -1629,7 +1657,7 @@ void NVRMNVDAFramebuffer::hotplugFire(thread_call_param_t, thread_call_param_t)
          bool listed = false;
          for (NvU32 i = 0; i < n; i++) if (gDpy[k].handle == handles[i]) { listed = true; break; }
          if (listed) continue;
@@ -79,3 +169,41 @@ index 1f4657a..c0d473c 100644
          if (!me->fKms->getDynamicDisplayInfo(me->fDev, dd) || dd->connected) continue;
          gDpy[k].connected = false;
          for (unsigned f = 0; f < sizeof gFBs / sizeof gFBs[0]; f++) {
+@@ -3847,6 +3875,15 @@ IOReturn NVRMNVDAFramebuffer::callPlatformFunction(const OSSymbol *functionName,
+         }
+         return kIOReturnSuccess;
+     }
++    if (functionName && functionName->isEqualTo(NVRM_VRAM_FN_REDIRECT)) {
++        if (!fKva && !fKvaOwn) return kIOReturnNotReady;
++        if (!fKvaOwn) fKvaOwn = fKva;
++        fRedirPhys = param1 ? (NvU64)(uintptr_t)param2 : 0;
++        fKva = param1 ? param1 : fKvaOwn;
++        if (!param1) fKvaOwn = nullptr;
++        FBLOG("nvScanoutRedirect: scanout kva %s, phys 0x%llx", param1 ? "redirected" : "restored", (unsigned long long)fRedirPhys);
++        return kIOReturnSuccess;
++    }
+     if (functionName && functionName->isEqualTo(NVRM_VRAM_FN_SCANOUT)) {
+         struct NVRMVramRequest *r = (struct NVRMVramRequest *)param1;
+         if (!r || r->version != NVRM_VRAM_ABI_VERSION) return kIOReturnBadArgument;
+@@ -3856,6 +3893,8 @@ IOReturn NVRMNVDAFramebuffer::callPlatformFunction(const OSSymbol *functionName,
+         r->actualSize = (unsigned long long)fPitch * fH;
+         r->width = fW; r->height = fH; r->pitch = fPitch;
+         r->handle = fMem;
++        r->mappedTotal = fMemBytes;
++        if (fRedirPhys) { r->flags |= NVRM_SCANOUT_FLAG_SYSPHYS; r->size = fRedirPhys; }
+         // Asked once per frame: logging every answer was 92% of a 512 KiB Send-logs kernel log (1401 issue #16), about
+         // 67 s of history. Log only when the answer changes.
+         if (fPhys != fScanLogPhys || fW != fScanLogW || fH != fScanLogH || fPitch != fScanLogPitch) {
+diff --git a/kexts/NVRMFB/nvrm_vram_abi.h b/kexts/NVRMFB/nvrm_vram_abi.h
+index 430fcb4..0055c69 100644
+--- a/kexts/NVRMFB/nvrm_vram_abi.h
++++ b/kexts/NVRMFB/nvrm_vram_abi.h
+@@ -11,6 +11,8 @@
+ #define NVRM_VRAM_FN_FREE     "nvFreeVram"
+ 
+ #define NVRM_VRAM_FN_SCANOUT  "nvScanoutInfo"
++#define NVRM_VRAM_FN_REDIRECT "nvScanoutRedirect"
++#define NVRM_SCANOUT_FLAG_SYSPHYS 1u
+ 
+ #define NVRM_VRAM_BAR1_BUDGET (192ull * 1024ull * 1024ull)
+ 

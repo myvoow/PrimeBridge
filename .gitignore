@@ -8,3 +8,4 @@ PrimeBridge-source/dist/
 
 # macOS
 .DS_Store
+__pycache__/

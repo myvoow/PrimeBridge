@@ -1,19 +1,33 @@
 #!/bin/sh
-# Installs the patched NVRMFB.kext (NullMoth 2.6.3 + nvfbforce) from this folder into /Library/Extensions.
-# Keeps your original as NVRMFB-2.6.3-orig.kext next to this script. Rollback: sudo sh install-nvrmfb.sh NVRMFB-2.6.3-orig.kext
 set -e
 cd "$(dirname "$0")"
-K=${1:-NVRMFB.kext}
-[ -d "$K" ] || { echo "no $K here"; exit 1; }
-[ -d NVRMFB-2.6.3-orig.kext ] || cp -R /Library/Extensions/NVRMFB.kext NVRMFB-2.6.3-orig.kext
-rm -rf /Library/Extensions/NVRMFB.kext
-cp -R "$K" /Library/Extensions/NVRMFB.kext
-chown -R root:wheel /Library/Extensions/NVRMFB.kext
-chmod -R 755 /Library/Extensions/NVRMFB.kext
+[ $# -gt 0 ] || set -- NVRMFB.kext NVAccel.kext
+V=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' /Library/Extensions/NVRM.kext/Contents/Info.plist)
+for K in "$@"; do
+    [ -d "$K" ] || { echo "no $K here"; exit 1; }
+    KV=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$K/Contents/Info.plist")
+    [ "$V" = "$KV" ] || { echo "$K is from NullMoth $KV but NullMoth $V is installed. Not installing: use the kexts built for $V."; exit 1; }
+done
+for K in "$@"; do
+    N=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$K/Contents/Info.plist")
+    I=/Library/Extensions/$N.kext
+    if [ ! -d "$N-$V-orig.kext" ]; then
+        if LC_ALL=C grep -q -e nvfbforce -e 'panel by the copy engine' "$I/Contents/MacOS/$N"; then
+            echo "The installed $N is already a patched one: no original kept in this folder."
+        else
+            cp -R "$I" "$N-$V-orig.kext"
+        fi
+    fi
+    rm -rf "$I"
+    cp -R "$K" "$I"
+    chown -R root:wheel "$I"
+    chmod -R 755 "$I"
+done
 kmutil create -n aux --allow-missing-kdk \
   -B /System/Library/KernelCollections/BootKernelExtensions.kc \
   -S /System/Library/KernelCollections/SystemKernelExtensions.kc \
   -A /Library/KernelCollections/AuxiliaryKernelExtensions.kc \
   -r /Library/Extensions
-echo "nvfbforce in the collection: $(LC_ALL=C grep -a -c nvfbforce /Library/KernelCollections/AuxiliaryKernelExtensions.kc) (0 = not patched)"
+KC=/Library/KernelCollections/AuxiliaryKernelExtensions.kc
+echo "in the collection: NVRMFB patch $(LC_ALL=C grep -a -c nvfbforce $KC), NVAccel patch $(LC_ALL=C grep -a -c 'panel by the copy engine' $KC) (0 = not patched)"
 echo "Approve the update in System Settings > Privacy & Security if asked, then reboot."
