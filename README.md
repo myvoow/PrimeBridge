@@ -39,6 +39,9 @@ Version 0.7.1 installs with one command: `./install.sh` finds the NullMoth versi
 
 No other laptop has been tested yet.
 
+> [!NOTE]
+> PrimeBridge is still a work in progress, and the optimization is not the best yet.
+
 > [!WARNING]
 > PrimeBridge is a kernel extension. It writes to the iGPU's memory and installs patched builds of two NullMoth kexts. It comes with no warranty. Keep an HDMI monitor at hand for your first boots, and try it from a USB stick first if you can.
 
