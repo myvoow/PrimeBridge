@@ -53,10 +53,10 @@ Version 0.7.1 installs with one command: `./install.sh` finds the NullMoth versi
 
 PrimeBridge works correctly on these two laptops, which both use iGPU ID `1002:1681`:
 
-| CPU | NVIDIA GPU | PrimeBridge |
-|:---|:---|:---:|
-| Ryzen 5 7535HS | GeForce RTX 4050 Laptop | 0.7.1 |
-| Ryzen 7 6800H | RTX 3050 | 0.4.8 |
+| Laptop | CPU | NVIDIA GPU | NullMoth | PrimeBridge |
+|:---|:---|:---|:---:|:---:|
+| Acer Nitro V 15 ANV15-41 | Ryzen 5 7535HS | GeForce RTX 4050 Laptop | 2.6.3 | 0.7.1 |
+| ASUS ROG Strix G513RC | Ryzen 7 6800H | GeForce RTX 3050 Laptop | 2.8.1 | 0.7.1 |
 
 > [!NOTE]
 > PrimeBridge is still a work in progress, and the optimization is not the best yet.

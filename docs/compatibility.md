@@ -25,16 +25,16 @@ Vega iGPUs are not matched, since NootedRed drives them. Intel iGPUs are not mat
 
 | | First laptop | Second laptop |
 |---|---|---|
-| Model | Acer Nitro V 15 ANV15-41 | |
+| Model | Acer Nitro V 15 ANV15-41 | ASUS ROG Strix G513RC |
 | CPU | Ryzen 5 7535HS | Ryzen 7 6800H |
-| iGPU ID | `1002:1681` | |
-| NVIDIA GPU | GeForce RTX 4050 Laptop | RTX 3050 |
-| Panel | 1920x1080, 144 Hz | |
-| Software | macOS 26.7.2, NullMoth 2.6.3 | |
-| PrimeBridge | 0.7.1 | 0.4.8 |
-| Result | Direct mode with the copy engine, forced mode 72 Hz | Works correctly, has not tried 0.7.1 yet |
+| iGPU ID | `1002:1681` | `1002:1681` |
+| NVIDIA GPU | GeForce RTX 4050 Laptop | GeForce RTX 3050 Laptop (4 GB) |
+| Panel | 1920x1080, 144 Hz | 1920x1080, 144 Hz |
+| Software | macOS 26.7.2, NullMoth 2.6.3 | macOS 26.7.2, NullMoth 2.8.1 |
+| PrimeBridge | 0.7.1 | 0.7.1 |
+| Result | Direct mode with the copy engine, forced mode 72 Hz | Direct mode with the copy engine, forced mode 72 Hz |
 
-The patch also builds for NullMoth 2.7.2 and 2.8.1, for macOS 15 and 26, but those have not run on a laptop yet.
+NullMoth 2.6.3 and 2.8.1 have run on macOS 26. The patch also builds for NullMoth 2.7.2 and for macOS 15, but those have not run on a laptop yet.
 
 ## Known limits
 
