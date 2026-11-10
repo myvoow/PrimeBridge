@@ -29,6 +29,8 @@ check('the generator gives back the EDID tested on the Nitro V15 (1920x1080 at 7
 check('a panel gets an even divisor of its refresh: 72 Hz for 144, 55 for 165, 60 for 60 and 240, 30 for 4K at 60',
       [g.pick_hz(1920, 1080, 144), g.pick_hz(1920, 1080, 165), g.pick_hz(1920, 1080, 60), g.pick_hz(2560, 1440, 240),
        g.pick_hz(3840, 2160, 60)] == [72, 55, 60, 60, 30])
+check('a measured 143.78 Hz panel gets its exact half: 71.89 Hz, 160.60 MHz',
+      abs(g.pick_hz(1920, 1080, 143.78) - 71.89) < 1e-9 and g.timing(1920, 1080, 71.89)[0] == 16060)
 check('the forced EDID is the generated nvfbforce_edid.inc', '#include "nvfbforce_edid.inc"' in fb)
 inc = root / 'kexts/NVRMFB/fb/nvfbforce_edid.inc'
 edid = bytes(int(x, 16) for x in re.findall(r'0x([0-9a-fA-F]{2})', inc.read_text())) if inc.exists() else b''

@@ -7,6 +7,7 @@ import platform
 import plistlib
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -69,6 +70,11 @@ def gen_edid():
             return m
 
 
+def panel_hz(pb):
+    logged = re.findall(rb'panel ([1-9][0-9]*\.[0-9]+) Hz', read('/var/log/PrimeBridge.log'))[-50:]
+    return statistics.median(map(float, logged)) if logged else pb[0].get('PanelHz', 0) if pb else 0
+
+
 def le(b):
     return int.from_bytes(b[:4], 'little')
 
@@ -118,8 +124,7 @@ def detect(a):
     if not w or not h:
         die('cannot find the panel resolution: pass it, e.g.  ./install.sh --panel 1920x1080')
     d['panel'] = f'{w}x{h}'
-    logged = re.findall(rb'panel ([1-9][0-9]*\.[0-9]+) Hz', read('/var/log/PrimeBridge.log'))
-    d['panelhz'] = a.panel_hz or (pb[0].get('PanelHz') if pb else 0) or (round(float(logged[-1])) if logged else 60)
+    d['panelhz'] = a.panel_hz or panel_hz(pb) or 60
     d['hz'] = gen_edid().pick_hz(w, h, d['panelhz'])
     if not d['hz']:
         die(f'no forced mode for a {w}x{h} panel fits HDMI')
@@ -154,7 +159,7 @@ def edit_config(dev, change):
         die('OpenCore Vault is on: a changed config.plist would not boot. Turn Vault to Optional, or add PrimeBridge by hand')
     change(p, mnt)
     with tempfile.NamedTemporaryFile(suffix='.plist', delete=False) as f:
-        plistlib.dump(p, f)
+        plistlib.dump(p, f, sort_keys=False)
     subprocess.run(['plutil', '-lint', '-s', f.name], check=True)
     sudo('cp', cfg, f'{LIB}/config.plist.{time.strftime("%Y%m%d-%H%M%S")}')
     sudo('cp', f.name, cfg)
@@ -185,6 +190,7 @@ def install(a):
         sudo('ditto', src, f'{LIB}/{os.path.basename(src)}')
     for src in (f'{HERE}/install-nvrmfb.sh', f'{HERE}/primebridge.py', f'{HERE}/NVRMFB-patch/gen_edid.py'):
         sudo('cp', src, LIB)
+    sudo('chown', '-R', 'root:wheel', LIB)
     added, pats = [], []
 
     def add(p, mnt):
@@ -261,12 +267,12 @@ def doctor(a):
             print('  staging copy: normal for a few seconds after boot, then the direct mode starts (still here later: see /var/log/PrimeBridge.log)')
         elif mode.startswith('no-'):
             bad.append(f'{mode}: see /var/log/PrimeBridge.log')
-        hz = p.get('PanelHz')
-        forced = read(f'{LIB}/forced-mode').decode().strip()
-        if hz and p.get('GOPWidth') and forced:
+        hz = panel_hz(pb)
+        forced = read(f'{LIB}/forced-mode').decode().strip().partition('@')
+        if hz and p.get('GOPWidth') and forced[2]:
             best = gen_edid().pick_hz(p['GOPWidth'], p['GOPHeight'], hz)
-            if best and forced != f"{p['GOPWidth']}x{p['GOPHeight']}@{best:g}":
-                print(f'  the panel runs at {hz} Hz: run ./install.sh again to force {best:g} Hz instead of {forced}')
+            if best and (forced[0] != f"{p['GOPWidth']}x{p['GOPHeight']}" or abs(float(forced[2]) - best) > 0.02):
+                print(f"  the panel runs at {hz:g} Hz: run ./install.sh again to force {best:g} Hz instead of {''.join(forced)}")
     print('\n'.join('problem: ' + x for x in bad) if bad else 'all good')
 
 

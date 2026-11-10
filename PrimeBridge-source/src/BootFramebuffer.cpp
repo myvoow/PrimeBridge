@@ -72,7 +72,7 @@ bool BootFramebuffer::attach(IOPCIDevice *igpu) {
     }
     mapLen_ = round64K(len);
     if (phys_ + mapLen_ > bar0_ + bar0Len_) mapLen_ = bar0_ + bar0Len_ - phys_;
-    map_ = bar0->createMappingInTask(kernel_task, 0,
+    boot_ = map_ = bar0->createMappingInTask(kernel_task, 0,
               kIOMapAnywhere | kIOMapWriteCombineCache, phys_ - bar0_, mapLen_);
     if (!map_) { IOLog("PrimeBridge: mapping failed\n"); return false; }
     base_ = reinterpret_cast<uint8_t *>(map_->getVirtualAddress());
@@ -86,14 +86,24 @@ bool BootFramebuffer::mapWriteCombined(uint64_t phys) {
     IOMemoryMap *m = md ? md->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapWriteCombineCache) : nullptr;
     if (md) md->release();
     if (!m) return false;
-    if (map_) map_->release();
+    if (map_ && map_ != boot_) map_->release();
     map_ = m;
     base_ = reinterpret_cast<uint8_t *>(m->getVirtualAddress());
     return true;
 }
 
+void BootFramebuffer::useBootMapping() {
+    if (!boot_ || map_ == boot_) return;
+    if (map_) map_->release();
+    map_ = boot_;
+    base_ = reinterpret_cast<uint8_t *>(boot_->getVirtualAddress());
+}
+
 void BootFramebuffer::detach() {
-    if (map_) { map_->release(); map_ = nullptr; base_ = nullptr; }
+    if (map_ && map_ != boot_) map_->release();
+    if (boot_) boot_->release();
+    map_ = boot_ = nullptr;
+    base_ = nullptr;
 }
 
 void BootFramebuffer::drawTestPattern(uint32_t mode, uint32_t fmt) {

@@ -47,7 +47,7 @@ private:
     void probeIgpu();
     void chooseWriteMapping(uint64_t vramGop);
     void logf(const char *fmt, ...) __printflike(2, 3);
-    void logFlush();
+    void logFlush(bool sync = true);
     void logShutdown();
 
     IOPCIDevice        *igpu_            {nullptr};
@@ -94,6 +94,9 @@ private:
     bool                fastWrites_      {false};
     bool                directKva_       {false};
     uint64_t            directPhys_      {0};
+    uint64_t            vramGop_         {0};
+    uint32_t            benchTries_      {0};
+    bool                rebench_         {false};
     int64_t             iopOk_           {-1};
 
     uint32_t            periodUs_        {6944};

@@ -30,6 +30,7 @@ static constexpr uint32_t kRegOtg0HTotal = (0x34C0 + 0x1b2a) * 4;
 static constexpr uint32_t kRegOtg0VTotal = (0x34C0 + 0x1b2f) * 4;
 static constexpr uint32_t kRegOtg0Frames = (0x34C0 + 0x1b4c) * 4;
 static constexpr uint32_t kOtgStride     = 0x80 * 4;
+static constexpr uint64_t kFastRowNs     = 3000;
 
 enum : uint32_t { kIgpuOther, kIgpuVega, kIgpuRembrandt, kIgpuDcn31 };
 static constexpr uint32_t igpuGen(uint16_t dev) {
@@ -99,7 +100,7 @@ void PrimeBridge::logf(const char *fmt, ...) {
 
 static const char kLogPath[] = "/var/log/PrimeBridge.log";
 
-void PrimeBridge::logFlush() {
+void PrimeBridge::logFlush(bool sync) {
     if (!logEnabled_ || !logBuf_ || logBufLen_ == 0) return;
 
     vfs_context_t ctx = vfs_context_create(nullptr);
@@ -120,7 +121,7 @@ void PrimeBridge::logFlush() {
     if (vnode_open(kLogPath, fmode, 0644, VNODE_LOOKUP_NOFOLLOW, &vp, ctx) == 0) {
         if (logLock_) IOLockLock(logLock_);
         int resid = 0;
-        if (vn_rdwr(UIO_WRITE, vp, (caddr_t)logBuf_, (int)logBufLen_, 0, UIO_SYSSPACE, IO_APPEND | IO_SYNC,
+        if (vn_rdwr(UIO_WRITE, vp, (caddr_t)logBuf_, (int)logBufLen_, 0, UIO_SYSSPACE, IO_APPEND | (sync ? IO_SYNC : 0),
                     vfs_context_ucred(ctx), &resid, kernproc) == 0)
             logBufLen_ = 0;
         if (logLock_) IOLockUnlock(logLock_);
@@ -371,8 +372,6 @@ bool PrimeBridge::attachNvidiaScanout() {
 
 void PrimeBridge::probeIgpu() {
     const bool haveRef = shadow_ && pixelFmt_ == 1 && nvPitch_ == fb_.stride() && nvHeight_ >= fb_.height();
-    uint32_t carve = 1;
-    PE_parse_boot_argn("primecarve", &carve, sizeof(carve));
     const uint16_t dev = igpu_->configRead16(kIOPCIConfigDeviceID);
     const uint32_t gen = igpuGen(dev), fb = gen == kIgpuVega ? kRegFbOffsetVega : gen == kIgpuRembrandt ? kRegFbOffset : 0;
     IODeviceMemory *bar5 = gen ? igpu_->getDeviceMemoryWithRegister(kIOPCIConfigBaseAddress5) : nullptr;
@@ -381,7 +380,7 @@ void PrimeBridge::probeIgpu() {
     if (!mmio_) {
         probed_ = true;
         logf("igpu probe: device 0x%04x, %s, BAR0 write benchmark only", dev, gen ? "BAR5 not mapped" : "no register map here");
-        if (haveRef && carve) chooseWriteMapping(0);
+        chooseWriteMapping(0);
         return;
     }
     regs_ = reinterpret_cast<volatile uint32_t *>(mmio_->getVirtualAddress());
@@ -426,13 +425,13 @@ void PrimeBridge::probeIgpu() {
         probed_ = true;
         logf("igpu probe: phys 0x%llx: %u of 32 pixels written through BAR0 read back there -> %s",
              vramPhys + gopOff, same, same == 32 ? "MATCH" : "NO MATCH");
-        if (carve) chooseWriteMapping(same == 32 ? vramPhys + gopOff : 0);
+        chooseWriteMapping(same == 32 ? vramPhys + gopOff : 0);
     } else {
         if (ram) ram->release();
         probed_ = true;
         if (fb) logf("igpu probe: no comparison (VRAM address implausible or not mappable, or no reference frame)");
         else logf("igpu probe: device 0x%04x, no VRAM register map here, BAR0 write benchmark only", dev);
-        if (haveRef && carve) chooseWriteMapping(0);
+        chooseWriteMapping(0);
     }
 
     for (uint32_t i = 0; i < 4 && !otgFrameReg_; i++) {
@@ -448,31 +447,45 @@ void PrimeBridge::probeIgpu() {
 }
 
 void PrimeBridge::chooseWriteMapping(uint64_t vramGop) {
+    uint32_t carve = 1;
+    PE_parse_boot_argn("primecarve", &carve, sizeof(carve));
+    if (!carve || !shadow_ || pixelFmt_ != 1 || nvPitch_ != fb_.stride() || nvHeight_ < fb_.height()) return;
     uint32_t lo = 0, hi = 0;
-    if (rdmsr_carefully(0x277, &lo, &hi) == 0)
-        logf("igpu writes: PAT 0x%08x%08x (PA6 %s)", hi, lo, ((hi >> 16) & 7u) == 1 ? "WC" : "not WC");
-    auto bench = [this]() -> uint64_t {
-        const uint64_t t0 = mach_absolute_time();
-        for (uint32_t k = 0; k < 64; k++) {
-            const uint32_t y = (2 * k + 1) * fb_.height() / 128;
-            fb_.blitRow(y, reinterpret_cast<const uint32_t *>(shadow_ + (uint64_t)y * nvPitch_), fb_.width(), pixelFmt_);
+    const bool wc = rdmsr_carefully(0x277, &lo, &hi) == 0 && ((hi >> 16) & 7u) == 1;
+    logf("igpu writes: PAT 0x%08x%08x (PA6 %s)", hi, lo, wc ? "WC" : "not WC");
+    auto bench = [this, wc]() -> uint64_t {
+        uint64_t best = ~0ULL;
+        for (uint32_t pass = 0; pass < (wc ? 4u : 1u) && best >= kFastRowNs; pass++) {
+            const uint64_t t0 = mach_absolute_time();
+            for (uint32_t k = 0; k < 64; k++) {
+                const uint32_t y = (2 * k + 1) * fb_.height() / 128;
+                fb_.blitRow(y, reinterpret_cast<const uint32_t *>(shadow_ + (uint64_t)y * nvPitch_), fb_.width(), pixelFmt_);
+            }
+            __builtin_ia32_sfence();
+            uint64_t ns;
+            absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
+            if (ns / 64 < best) best = ns / 64;
         }
-        __builtin_ia32_sfence();
-        uint64_t ns;
-        absolutetime_to_nanoseconds(mach_absolute_time() - t0, &ns);
-        return ns / 64;
+        return best;
     };
+    fb_.useBootMapping();
     const uint64_t tBar = bench();
     const uint64_t tBarWC = fb_.mapWriteCombined(fb_.physAddr()) ? bench() : ~0ULL;
     const uint64_t tVram = vramGop && fb_.mapWriteCombined(vramGop) ? bench() : ~0ULL;
     const bool vram = tVram < tBarWC && tVram < tBar;
-    if (!vram) fb_.mapWriteCombined(fb_.physAddr());
+    uint64_t best = tVram;
+    if (!vram) {
+        if (tBarWC < tBar && fb_.mapWriteCombined(fb_.physAddr())) best = tBarWC;
+        else { fb_.useBootMapping(); best = tBar; }
+    }
     directPhys_ = vram ? vramGop : 0;
-    const uint64_t best = vram ? tVram : (tBarWC < tBar ? tBarWC : tBar);
-    fastWrites_ = best < 3000;
+    vramGop_ = vramGop;
+    fastWrites_ = best < kFastRowNs;
+    rebench_ = !fastWrites_ && wc && ++benchTries_ <= 8;
     setProperty("PrimeMode", vram ? "staging-redirect-carveout" : "staging-redirect-ce-8bit");
-    logf("igpu writes: ns per row: BAR0 %llu, BAR0 write-combined %lld, VRAM write-combined %lld -> %s%s",
-         tBar, (long long)tBarWC, (long long)tVram, vram ? "VRAM at phys" : "BAR0", fastWrites_ ? ", fast" : "");
+    logf("igpu writes: ns per row: BAR0 %llu, BAR0 write-combined %lld, VRAM write-combined %lld -> %s%s%s",
+         tBar, (long long)tBarWC, (long long)tVram, vram ? "VRAM at phys" : "BAR0", fastWrites_ ? ", fast" : "",
+         rebench_ ? ", slow with PA6 WC: measuring again later" : "");
 }
 
 void PrimeBridge::tickNullMoth(IOTimerEventSource *t) {
@@ -483,12 +496,12 @@ void PrimeBridge::tickNullMoth(IOTimerEventSource *t) {
             fb_.drawCalibration(colorStage_);
             logf("calibration mire: stage %u", colorStage_);
         }
-        if ((++logTick_ & 15u) == 0) logFlush();
+        if ((++logTick_ & 15u) == 0) logFlush(false);
         t->setTimeoutMS(250);
         return;
     }
 
-    if ((++logTick_ & 15u) == 0) logFlush();
+    if ((++logTick_ & 15u) == 0) logFlush(false);
 
     if (!nvfb_) {
         findNvidiaFramebuffer();
@@ -684,9 +697,10 @@ void PrimeBridge::tickNullMoth(IOTimerEventSource *t) {
              workNs / 720000, maxNs / 1000, blitNs / 720000, statRows_ / 720, panelHz100 / 100, panelHz100 % 100,
              directKva_ ? ", direct" : "");
         statWork_ = statWorkMax_ = statBlit_ = statRows_ = 0;
-        logFlush();
+        logFlush(false);
     }
     if (!probed_ && !anyRowChanged && framesCopied_) probeIgpu();
+    else if (rebench_ && !directKva_ && statTick_ == 0) chooseWriteMapping(vramGop_);
     if (fastWrites_ && !directKva_ && redirected_ && staging_ && pixelFmt_ == 1 && !mirrorExternal_ &&
         nvAlloc_ && nvAlloc_ <= fb_.mapLength() &&
         nvWidth_ == fb_.width() && nvHeight_ == fb_.height() && nvPitch_ == fb_.stride() &&
