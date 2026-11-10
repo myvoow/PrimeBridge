@@ -1,18 +1,13 @@
 #pragma once
 #include <IOKit/pci/IOPCIDevice.h>
-#include "FrameSource.hpp"
 
 class BootFramebuffer {
 public:
-    static constexpr uint32_t kMaxCursorDim = 64;
-
     bool attach(IOPCIDevice *igpu);
     void detach();
     bool mapWriteCombined(uint64_t phys);
     void useBootMapping();
     void drawTestPattern(uint32_t mode = 1, uint32_t fmt = 0);
-    void blitFromCPU(const PrimeFrame &f, uint32_t fmt);
-
     void blitRow(uint32_t y, const uint32_t *srcRow, uint32_t w, uint32_t fmt);
 
     void drawCalibration(uint32_t stage);

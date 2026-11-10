@@ -31,13 +31,9 @@ public:
     bool start(IOService *provider) override;
     void stop(IOService *provider) override;
     void detach(IOService *provider) override;
-
-    bool registerFrameSource(PrimeFrameSource *src);
-    void unregisterFrameSource(PrimeFrameSource *src);
 private:
     bool setup(IOService *provider);
     void cleanup();
-    void copyTick(IOTimerEventSource *sender);
     void tickNullMoth(IOTimerEventSource *sender);
     bool findNvidiaFramebuffer();
     bool attachNvidiaScanout();
@@ -54,9 +50,7 @@ private:
     BootFramebuffer     fb_;
     IOWorkLoop         *wl_              {nullptr};
     IOTimerEventSource *timer_           {nullptr};
-    IOLock             *lock_            {nullptr};
     IOLock             *logLock_         {nullptr};
-    PrimeFrameSource   *source_          {nullptr};
 
     const OSSymbol     *symScanoutInfo_  {nullptr};
     const OSSymbol     *symRedirect_     {nullptr};
@@ -101,7 +95,6 @@ private:
 
     uint32_t            periodUs_        {6944};
     uint64_t            nextTickAbs_     {0};
-    uint64_t            lastSeq_         {0};
     uint32_t            testMode_        {0};
     uint32_t            holdTicks_       {0};
     uint32_t            targetPeriodUs_  {0};

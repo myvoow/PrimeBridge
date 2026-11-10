@@ -165,18 +165,6 @@ void BootFramebuffer::drawCalibration(uint32_t stage) {
           stage, stage < 6 ? names[stage] : "?", stage < 5 ? pattern[stage] : 0xFFFFFFFFu);
 }
 
-void BootFramebuffer::blitFromCPU(const PrimeFrame &f, uint32_t fmt) {
-    if (!base_ || !f.cpuMap || f.format != kPrimeFormatXRGB8888) return;
-    const uint8_t *src = reinterpret_cast<const uint8_t *>(f.cpuMap->getVirtualAddress());
-    const uint32_t w = f.width  < width_  ? f.width  : width_;
-    const uint32_t h = f.height < height_ ? f.height : height_;
-    for (uint32_t y = 0; y < h; y++) {
-        const uint32_t *srcRow = reinterpret_cast<const uint32_t *>(src + (uint64_t)y * f.stride);
-        blitRow(y, srcRow, w, fmt);
-    }
-    __builtin_ia32_sfence();
-}
-
 void BootFramebuffer::blitRow(uint32_t y, const uint32_t *srcRow, uint32_t w, uint32_t fmt) {
     if (!base_ || !srcRow || y >= height_) return;
     if (w > width_) w = width_;

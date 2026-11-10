@@ -16,7 +16,6 @@
 
 #define PBLOG(fmt, ...) do { IOLog("PrimeBridge: " fmt "\n", ##__VA_ARGS__); } while (0)
 
-OSDefineMetaClassAndAbstractStructors(PrimeFrameSource, OSObject)
 OSDefineMetaClassAndStructors(PrimeBridge, IOService)
 
 static constexpr uint32_t kRegFbOffset   = (0x1260 + 0x16e7) * 4;
@@ -227,33 +226,14 @@ bool PrimeBridge::setup(IOService *provider) {
     targetPeriodUs_ = periodUs_ = 1000000 / hz;
     setProperty("TargetHz", hz, 32);
 
-    lock_  = IOLockAlloc();
     logLock_ = IOLockAlloc();
     wl_    = IOWorkLoop::workLoop();
     timer_ = IOTimerEventSource::timerEventSource(this,
-               OSMemberFunctionCast(IOTimerEventSource::Action, this, &PrimeBridge::copyTick));
-    if (!(lock_ && logLock_ && wl_ && timer_ && wl_->addEventSource(timer_) == kIOReturnSuccess)) return false;
+               OSMemberFunctionCast(IOTimerEventSource::Action, this, &PrimeBridge::tickNullMoth));
+    if (!(logLock_ && wl_ && timer_ && wl_->addEventSource(timer_) == kIOReturnSuccess)) return false;
 
     timer_->setTimeoutMS(250);
     return true;
-}
-
-bool PrimeBridge::registerFrameSource(PrimeFrameSource *src) {
-    if (!src || !lock_) return false;
-    IOLockLock(lock_);
-    if (source_) { IOLockUnlock(lock_); return false; }
-    src->retain(); source_ = src; lastSeq_ = 0; holdTicks_ = 0;
-    IOLockUnlock(lock_);
-    timer_->setTimeoutUS(periodUs_);
-    setProperty("PrimeMode", "explicit-frame-source");
-    logf("frame source registered");
-    return true;
-}
-
-void PrimeBridge::unregisterFrameSource(PrimeFrameSource *src) {
-    IOLockLock(lock_);
-    if (source_ == src) { source_->release(); source_ = nullptr; }
-    IOLockUnlock(lock_);
 }
 
 bool PrimeBridge::findNvidiaFramebuffer() {
@@ -720,31 +700,6 @@ void PrimeBridge::tickNullMoth(IOTimerEventSource *t) {
     t->wakeAtTime(nextTickAbs_);
 }
 
-void PrimeBridge::copyTick(IOTimerEventSource *t) {
-    IOLockLock(lock_);
-    PrimeFrameSource *src = source_;
-    if (src) src->retain();
-    IOLockUnlock(lock_);
-
-    if (!src) {
-        tickNullMoth(t);
-        return;
-    }
-
-    PrimeFrame f {};
-    if (src->acquireFrame(&f)) {
-        if (f.seq != lastSeq_) {
-            if (src->gpuCopyTo(f, fb_.physAddr(), fb_.stride()) != kIOReturnSuccess)
-                fb_.blitFromCPU(f, pixelFmt_);
-            lastSeq_ = f.seq;
-            framesCopied_++;
-        }
-        src->releaseFrame(&f);
-    }
-    src->release();
-    t->setTimeoutUS(periodUs_);
-}
-
 void PrimeBridge::cleanup() {
     if (timer_) {
         timer_->cancelTimeout();
@@ -766,12 +721,6 @@ void PrimeBridge::cleanup() {
     if (symScanoutInfo_) { symScanoutInfo_->release(); symScanoutInfo_ = nullptr; }
     if (symRedirect_) { symRedirect_->release(); symRedirect_ = nullptr; }
 
-    if (lock_) {
-        IOLockLock(lock_);
-        if (source_) { source_->release(); source_ = nullptr; }
-        IOLockUnlock(lock_);
-        IOLockFree(lock_); lock_ = nullptr;
-    }
     logShutdown();
     if (logLock_) { IOLockFree(logLock_); logLock_ = nullptr; }
     if (mmio_) { mmio_->release(); mmio_ = nullptr; regs_ = nullptr; otgFrameReg_ = 0; }
