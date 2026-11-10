@@ -100,6 +100,8 @@ def detect(a):
     d['igpu'] = next((x for x in igpu if x in ok), None)
     if not d['igpu']:
         die('iGPU ' + ', '.join(f'{x & 0xffff:04x}:{x >> 16:04x}' for x in igpu) + ' is not supported yet')
+    if 'nootedred' in out('kmutil', 'showloaded').lower():
+        die('NootedRed is loaded and drives this iGPU, which PrimeBridge cannot share: disable NootedRed in OpenCore, restart, then run install.sh again')
     pb = ioreg('PrimeBridge')
     w = h = 0
     if a.panel:

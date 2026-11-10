@@ -8,18 +8,21 @@ PrimeBridge supports these AMD iGPUs. `install.sh` accepts them and the driver a
 
 | Radeon iGPU | PCI IDs (vendor `1002`) | Copy engine direct mode | Panel Hz measured |
 |---|---|---|---|
-| 680M / 660M | `1681` | Yes | Yes |
-| 780M / 760M / 740M | `15bf`, `15c8`, `1900`, `1901` | No | No |
+| Vega (Ryzen 2000 to 5000) | `15dd`, `15d8`, `1636`, `1638`, `164c`, `15e7` | Yes | Yes |
+| 680M / 660M | `1681`, `164d` | Yes | Yes |
+| 780M / 760M / 740M | `15bf`, `15c8`, `1900`, `1901` | No | Yes |
+| 610M | `164e`, `13c0`, `1506` | No | Yes |
 | 890M / 880M | `150e` | No | No |
 | 860M / 840M / 820M | `1114`, `1902` | No | No |
 | 8060S / 8050S | `1586` | No | No |
-| 610M | `164e`, `13c0`, `1506` | No | No |
+
+These two features read iGPU registers, whose addresses come from the Linux amdgpu headers. A feature is on only where those headers give both the register and the base address of its block. On the last three rows Linux reads that base address from the chip at run time, so PrimeBridge leaves the features off there.
 
 The GOP framebuffer path is the same on all of them. Without the copy engine, PrimeBridge still goes direct (`direct-kva`) when write-combined writes to BAR0 take under 3 µs per row, and stays in staging mode otherwise.
 
 Only ID `1681` has run on a laptop so far. Reports from the other IDs are the most useful ones: see [Feedback](../README.md#feedback).
 
-Vega iGPUs are not matched, since NootedRed drives them. Intel iGPUs are not matched yet.
+On a Vega iGPU, PrimeBridge and NootedRed cannot run together, since both take the iGPU: `install.sh` stops when NootedRed is loaded. Intel iGPUs are not matched yet.
 
 ## Laptops that have run it
 

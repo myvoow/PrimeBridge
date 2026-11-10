@@ -8,7 +8,7 @@
 
 ![version](https://img.shields.io/badge/version-0.7.1-2F81F7?style=for-the-badge)
 ![macOS](https://img.shields.io/badge/macOS-15%20%7C%2026-555555?style=for-the-badge&logo=apple&logoColor=white)
-![iGPU](https://img.shields.io/badge/iGPU-12%20AMD%20PCI%20IDs-ED1C24?style=for-the-badge&logo=amd&logoColor=white)
+![iGPU](https://img.shields.io/badge/iGPU-19%20AMD%20PCI%20IDs-ED1C24?style=for-the-badge&logo=amd&logoColor=white)
 ![requires](https://img.shields.io/badge/requires-NullMoth%202.6.3%2B-76B900?style=for-the-badge&logo=nvidia&logoColor=white)
 ![license](https://img.shields.io/badge/license-MIT-3FB950?style=for-the-badge)
 
@@ -49,7 +49,7 @@ flowchart LR
 
 ## Status
 
-Version 0.7.1 installs with one command: `./install.sh` finds the NullMoth version, the iGPU, the panel and the OpenCore EFI partition, builds the patched NullMoth kexts for that exact version and macOS, and installs everything. It supports [12 AMD iGPU PCI IDs](docs/compatibility.md#supported-igpus), from the Radeon 610M to the 890M and 8060S.
+Version 0.7.1 installs with one command: `./install.sh` finds the NullMoth version, the iGPU, the panel and the OpenCore EFI partition, builds the patched NullMoth kexts for that exact version and macOS, and installs everything. It supports [19 AMD iGPU PCI IDs](docs/compatibility.md#supported-igpus), from Vega to the Radeon 890M and 8060S.
 
 PrimeBridge works correctly on these two laptops, which both use iGPU ID `1002:1681`:
 

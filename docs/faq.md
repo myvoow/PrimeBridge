@@ -10,11 +10,11 @@ You need an AMD iGPU from the [supported list](compatibility.md#supported-igpus)
 
 ## Does every iGPU in the list get the same result?
 
-All 12 PCI IDs install and use the same GOP framebuffer path. ID `1002:1681` (680M / 660M) also gets the copy engine direct mode and the panel refresh measurement. The other IDs go direct through BAR0 when writes are fast enough, and stay in staging mode otherwise. The [compatibility table](compatibility.md#supported-igpus) shows this per ID, and ID `1681` is the only one that has run on a laptop so far.
+All 19 PCI IDs install and use the same GOP framebuffer path. Some also get the copy engine direct mode and the panel refresh measurement. The others go direct through BAR0 when writes are fast enough, and stay in staging mode otherwise. The [compatibility table](compatibility.md#supported-igpus) shows this per ID, and ID `1681` is the only one that has run on a laptop so far.
 
 ## `install.sh` says my iGPU "is not supported yet"
 
-Its PCI ID is not in the list. Vega iGPUs are left out because NootedRed drives them, and Intel iGPUs are not matched yet. For another AMD iGPU, you can [add its ID](development.md#a-different-igpu) to `IOPCIPrimaryMatch` in `Info.plist`.
+Its PCI ID is not in the list. Intel iGPUs are not matched yet. For another AMD iGPU, you can [add its ID](development.md#a-different-igpu) to `IOPCIPrimaryMatch` in `Info.plist`.
 
 ## My NVIDIA GPU has no HDMI port
 

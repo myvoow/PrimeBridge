@@ -20,13 +20,27 @@ OSDefineMetaClassAndAbstractStructors(PrimeFrameSource, OSObject)
 OSDefineMetaClassAndStructors(PrimeBridge, IOService)
 
 static constexpr uint32_t kRegFbOffset   = (0x1260 + 0x16e7) * 4;
-static constexpr uint32_t kRegFbLocBase  = (0x1260 + 0x16fc) * 4;
-static constexpr uint32_t kRegFbLocTop   = (0x1260 + 0x16fd) * 4;
+static constexpr uint32_t kRegFbOffsetVega = (0x2000 + 0x096b) * 4;
+static constexpr uint32_t kFbLocBase     = 0x15;
+static constexpr uint32_t kFbLocTop      = 0x16;
+static_assert(0x16fc - 0x16e7 == kFbLocBase && 0x16fd - 0x16e7 == kFbLocTop && 0x0980 - 0x096b == kFbLocBase && 0x0981 - 0x096b == kFbLocTop,
+              "FB_LOCATION_BASE and TOP sit 0x15 and 0x16 registers after FB_OFFSET in gc_10_3_0 (Rembrandt) and in gc_9_0 (Vega)");
 static constexpr uint32_t kRegOtg0Ctl    = (0x34C0 + 0x1b41) * 4;
 static constexpr uint32_t kRegOtg0HTotal = (0x34C0 + 0x1b2a) * 4;
 static constexpr uint32_t kRegOtg0VTotal = (0x34C0 + 0x1b2f) * 4;
 static constexpr uint32_t kRegOtg0Frames = (0x34C0 + 0x1b4c) * 4;
 static constexpr uint32_t kOtgStride     = 0x80 * 4;
+
+enum : uint32_t { kIgpuOther, kIgpuVega, kIgpuRembrandt, kIgpuDcn31 };
+static constexpr uint32_t igpuGen(uint16_t dev) {
+    return dev == 0x15dd || dev == 0x15d8 || dev == 0x1636 || dev == 0x1638 || dev == 0x164c || dev == 0x15e7 ? kIgpuVega
+         : dev == 0x1681 || dev == 0x164d ? kIgpuRembrandt
+         : dev == 0x15bf || dev == 0x15c8 || dev == 0x1900 || dev == 0x1901 || dev == 0x164e || dev == 0x13c0 || dev == 0x1506 ? kIgpuDcn31
+         : kIgpuOther;
+}
+static_assert(igpuGen(0x1681) == kIgpuRembrandt && igpuGen(0x1638) == kIgpuVega && igpuGen(0x15bf) == kIgpuDcn31 &&
+              igpuGen(0x150e) == kIgpuOther && igpuGen(0x1114) == kIgpuOther && igpuGen(0x1902) == kIgpuOther && igpuGen(0x1586) == kIgpuOther,
+              "registers are read only where the Linux headers give the block's base address: not on DCN 3.5 and 3.6, which take it from IP discovery");
 
 extern "C" int rdmsr_carefully(uint32_t msr, uint32_t *lo, uint32_t *hi);
 
@@ -360,24 +374,25 @@ void PrimeBridge::probeIgpu() {
     uint32_t carve = 1;
     PE_parse_boot_argn("primecarve", &carve, sizeof(carve));
     const uint16_t dev = igpu_->configRead16(kIOPCIConfigDeviceID);
-    IODeviceMemory *bar5 = dev == 0x1681 ? igpu_->getDeviceMemoryWithRegister(kIOPCIConfigBaseAddress5) : nullptr;
+    const uint32_t gen = igpuGen(dev), fb = gen == kIgpuVega ? kRegFbOffsetVega : gen == kIgpuRembrandt ? kRegFbOffset : 0;
+    IODeviceMemory *bar5 = gen ? igpu_->getDeviceMemoryWithRegister(kIOPCIConfigBaseAddress5) : nullptr;
     if (!mmio_ && bar5 && bar5->getLength() >= 0x80000)
         mmio_ = bar5->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapInhibitCache, 0, 0x80000);
     if (!mmio_) {
         probed_ = true;
-        logf("igpu probe: device 0x%04x, %s, BAR0 write benchmark only", dev, dev == 0x1681 ? "BAR5 not mapped" : "no register map here");
+        logf("igpu probe: device 0x%04x, %s, BAR0 write benchmark only", dev, gen ? "BAR5 not mapped" : "no register map here");
         if (haveRef && carve) chooseWriteMapping(0);
         return;
     }
     regs_ = reinterpret_cast<volatile uint32_t *>(mmio_->getVirtualAddress());
 
-    const uint32_t off = regs_[kRegFbOffset / 4], base = regs_[kRegFbLocBase / 4], top = regs_[kRegFbLocTop / 4];
+    const uint32_t off = fb ? regs_[fb / 4] : 0xFFFFFFFFu, base = fb ? regs_[fb / 4 + kFbLocBase] : 0, top = fb ? regs_[fb / 4 + kFbLocTop] : 0;
     const uint64_t vramPhys = (uint64_t)(off & 0xFFFFFFu) << 24;
     const uint64_t vramSize = (top & 0xFFFFFFu) >= (base & 0xFFFFFFu)
                             ? (uint64_t)((top & 0xFFFFFFu) - (base & 0xFFFFFFu) + 1) << 24 : 0;
     const uint64_t gopOff = fb_.physAddr() - fb_.bar0Phys(), len = (uint64_t)fb_.stride() * fb_.height();
-    logf("igpu probe: FB_OFFSET 0x%08x FB_LOCATION 0x%08x..0x%08x -> VRAM at phys 0x%llx, %llu MB; GOP at VRAM +0x%llx",
-         off, base, top, vramPhys, vramSize >> 20, gopOff);
+    if (fb) logf("igpu probe: FB_OFFSET 0x%08x FB_LOCATION 0x%08x..0x%08x -> VRAM at phys 0x%llx, %llu MB; GOP at VRAM +0x%llx",
+                 off, base, top, vramPhys, vramSize >> 20, gopOff);
 
     IOMemoryMap *ram = nullptr;
     if (off != 0xFFFFFFFFu && vramPhys && gopOff + fb_.mapLength() <= vramSize) {
@@ -415,7 +430,8 @@ void PrimeBridge::probeIgpu() {
     } else {
         if (ram) ram->release();
         probed_ = true;
-        logf("igpu probe: no comparison (VRAM address implausible or not mappable, or no reference frame)");
+        if (fb) logf("igpu probe: no comparison (VRAM address implausible or not mappable, or no reference frame)");
+        else logf("igpu probe: device 0x%04x, no VRAM register map here, BAR0 write benchmark only", dev);
         if (haveRef && carve) chooseWriteMapping(0);
     }
 
