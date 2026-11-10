@@ -61,6 +61,9 @@ PrimeBridge works correctly on these two laptops, which both use iGPU ID `1002:1
 > [!NOTE]
 > PrimeBridge is still a work in progress, and the optimization is not the best yet.
 
+> [!TIP]
+> NullMoth 2.9 has the same idea built in: its experimental hybrid mode (`NMGopFB.kext`, boot-arg `nmhybrid=1`) maps the firmware framebuffer the way PrimeBridge does, with my permission. On 2.9 it may work for you too, and it is simpler to set up ([NullMoth's guide](https://github.com/nullmoth/nvidia-macos-driver/blob/v2.9/docs/HYBRID-LAPTOPS.md)). PrimeBridge itself does not support 2.9 yet.
+
 ## Requirements
 
 | | |
