@@ -25,24 +25,46 @@ def section(text, start, end):
     return s[:s.index(end)]
 
 
+def decoded(e):
+    pclk = e[54] | e[55] << 8
+    hact, hblank = e[56] | (e[58] >> 4) << 8, e[57] | (e[58] & 15) << 8
+    vact, vblank = e[59] | (e[61] >> 4) << 8, e[60] | (e[61] & 15) << 8
+    return pclk, hact, vact, hact + hblank, pclk * 10000 / ((hact + hblank) * (vact + vblank))
+
+
+def hdmi_block(e, pclk):
+    return len(e) == 256 and e[132:136] == bytes([0x67, 3, 0x0c, 0]) and e[139] * 500 >= pclk
+
+
+def valid(e, w, h, hz):
+    pclk, hact, vact, htotal, rate = decoded(e)
+    return (all(sum(e[i:i + 128]) % 256 == 0 for i in range(0, len(e), 128)) and e[126] == len(e) // 128 - 1
+            and (hact, vact) == (w, h) and abs(rate - hz) < 0.01 and e[95] <= rate <= e[96]
+            and e[97] <= pclk * 10 / htotal <= e[98] and pclk <= e[99] * 1000
+            and (len(e) == 128 and pclk <= 16500 or pclk > 16500 and hdmi_block(e, pclk)))
+
+
 check('the generator gives back the EDID tested on the Nitro V15 (1920x1080 at 72 Hz)', g.edid(1920, 1080, 72, (344, 193)) == g.BASE)
 check('a panel gets an even divisor of its refresh: 72 Hz for 144, 55 for 165, 60 for 60 and 240, 30 for 4K at 60',
       [g.pick_hz(1920, 1080, 144), g.pick_hz(1920, 1080, 165), g.pick_hz(1920, 1080, 60), g.pick_hz(2560, 1440, 240),
        g.pick_hz(3840, 2160, 60)] == [72, 55, 60, 60, 30])
 check('a measured 143.78 Hz panel gets its exact half: 71.89 Hz, 160.60 MHz',
       abs(g.pick_hz(1920, 1080, 143.78) - 71.89) < 1e-9 and g.timing(1920, 1080, 71.89)[0] == 16060)
+panels = [(1366, 768, 60), (1600, 900, 60), (1920, 1080, 60), (1920, 1080, 143.78), (1920, 1080, 165), (1920, 1080, 360),
+          (1920, 1200, 165), (2560, 1440, 165), (2560, 1440, 240), (2560, 1600, 120), (2560, 1600, 240), (2880, 1800, 120),
+          (3200, 2000, 165), (3840, 2160, 60), (3840, 2160, 120), (3840, 2400, 60)]
+check('every panel from 1366x768 to 4K at 60 to 360 Hz gets a valid EDID: checksums, its size, the picked rate, '
+      'inside its range limits, and an HDMI block past 165 MHz',
+      all(valid(g.edid(w, h, g.pick_hz(w, h, p), (344, 193)), w, h, g.pick_hz(w, h, p)) for w, h, p in panels)
+      and sum(len(g.edid(w, h, g.pick_hz(w, h, p), (344, 193))) == 256 for w, h, p in panels) == 9)
 check('the forced EDID is the generated nvfbforce_edid.inc', '#include "nvfbforce_edid.inc"' in fb)
 inc = root / 'kexts/NVRMFB/fb/nvfbforce_edid.inc'
 edid = bytes(int(x, 16) for x in re.findall(r'0x([0-9a-fA-F]{2})', inc.read_text())) if inc.exists() else b''
 check('every block of it has a valid checksum', len(edid) in (128, 256) and all(sum(edid[i:i + 128]) % 256 == 0 for i in range(0, len(edid), 128)))
 if edid:
-    pclk = edid[54] | edid[55] << 8
-    hact, hblank = edid[56] | (edid[58] >> 4) << 8, edid[57] | (edid[58] & 15) << 8
-    vact, vblank = edid[59] | (edid[61] >> 4) << 8, edid[60] | (edid[61] & 15) << 8
-    hz = pclk * 10000 / ((hact + hblank) * (vact + vblank))
-    hdmi = len(edid) == 256 and edid[132:136] == bytes([0x67, 3, 0x0c, 0]) and edid[139] * 500 >= pclk
+    pclk, hact, vact, _, hz = decoded(edid)
     check('its timing paces evenly (24 to 75 Hz) and fits HDMI: 165 MHz, or the clock its HDMI block declares',
-          24 <= hz < 75.1 and (pclk <= 16500 and len(edid) == 128 or hdmi))
+          24 <= hz < 75.1 and (pclk <= 16500 and len(edid) == 128 or hdmi_block(edid, pclk)))
     want = os.environ.get('PANEL')
     if want:
         w, h = map(int, want.split('x'))
