@@ -9,7 +9,7 @@
 ![version](https://img.shields.io/badge/version-0.7.1-2F81F7?style=for-the-badge)
 ![macOS](https://img.shields.io/badge/macOS-15%20%7C%2026-555555?style=for-the-badge&logo=apple&logoColor=white)
 ![iGPU](https://img.shields.io/badge/iGPU-19%20AMD%20PCI%20IDs-ED1C24?style=for-the-badge&logo=amd&logoColor=white)
-![requires](https://img.shields.io/badge/requires-NullMoth%202.6.3%2B-76B900?style=for-the-badge&logo=nvidia&logoColor=white)
+![requires](https://img.shields.io/badge/requires-NullMoth%202.6.3%20to%202.8.1-76B900?style=for-the-badge&logo=nvidia&logoColor=white)
 ![license](https://img.shields.io/badge/license-MIT-3FB950?style=for-the-badge)
 
 <br>
@@ -66,7 +66,7 @@ PrimeBridge works correctly on these two laptops, which both use iGPU ID `1002:1
 | | |
 |:---|:---|
 | iGPU | An AMD iGPU from the [supported list](docs/compatibility.md#supported-igpus), with the internal panel wired only to it |
-| NVIDIA GPU | NullMoth 2.6.3 or later already working |
+| NVIDIA GPU | NullMoth 2.6.3 to 2.8.1 already working (2.9 is not supported yet) |
 | HDMI | A port wired to the NVIDIA GPU, with nothing plugged into it at boot |
 | Bootloader | OpenCore, with `Misc > Security > Vault` set to `Optional` |
 | macOS | 15 or 26, and the Xcode Command Line Tools |
@@ -105,7 +105,7 @@ The full technical notes are in one file: [`llms.txt`](llms.txt).
 
 Open an issue with the [Test report](../../issues/new?template=test-report.yml) template, or reach me on Discord: **@64417**.
 
-The template asks for the laptop model, PCI IDs, panel resolution, macOS and NullMoth versions, the output of `./install.sh --dry-run` and `./doctor.sh`, the `ioreg` output and the end of the log. With those I can narrow down most problems without a back-and-forth.
+The template asks for the laptop model, PCI IDs, panel resolution, macOS and NullMoth versions, the output of `./install.sh --dry-run` and `./doctor.sh --report`, which ends with the log, and the `ioreg` output. With those I can narrow down most problems without a back-and-forth.
 
 ## License
 

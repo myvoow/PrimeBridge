@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Thanks for testing. Reports from laptops other than the Acer Nitro V 15 ANV15-41 are the most useful, even when nothing works.
-        Wait a minute after login before collecting the log.
+        Wait a minute after login before running `./doctor.sh --report`.
   - type: input
     id: laptop
     attributes:
@@ -46,7 +46,8 @@ body:
   - type: textarea
     id: install
     attributes:
-      label: Output of `./install.sh --dry-run` and `./doctor.sh`
+      label: Output of `./install.sh --dry-run` and `./doctor.sh --report`
+      description: The report has the system, the settings and the end of the PrimeBridge log.
       render: text
     validations:
       required: true
@@ -69,13 +70,6 @@ body:
     attributes:
       label: Output of `ioreg -rc PrimeBridge -d1`
       render: text
-  - type: textarea
-    id: log
-    attributes:
-      label: Output of `tail -40 /var/log/PrimeBridge.log`
-      render: text
-    validations:
-      required: true
   - type: textarea
     id: notes
     attributes:

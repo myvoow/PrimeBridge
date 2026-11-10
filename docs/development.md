@@ -41,6 +41,17 @@ sh build.sh
 otool -tV build/PrimeBridge.kext/Contents/MacOS/PrimeBridge | grep -cE "cvtsi2sd|divsd"
 ```
 
+## Tests
+
+```bash
+python3 -I test_primebridge.py
+PANEL=1920x1080 PANELHZ=144 sh NVRMFB-patch/build-nvrmfb.sh 2.8.1
+```
+
+`test_primebridge.py` checks the installer's edits to `nvrm610.conf`. `build-nvrmfb.sh` runs `test_nvfbforce.py` on the patched source and on the generated EDID, which it also checks on a set of panels from 1366x768 to 4K.
+
+GitHub Actions (`.github/workflows/build.yml`) runs both and builds the kext at every push, on NullMoth 2.6.3, 2.7.2 and 2.8.1 for macOS 15 and 26. Every Monday it also tries the newest NullMoth release, so a release the patch does not apply to shows up as a failed run.
+
 ## Where to start in the code
 
 - `PrimeBridge.cpp`: `attachNvidiaScanout()` does the redirect, `probeIgpu()` and `chooseWriteMapping()` probe the iGPU and benchmark the writes, and `tickNullMoth()` runs the staging copy, the geometry check and the switch to direct mode.
@@ -58,6 +69,7 @@ Diagnose from `/var/log/PrimeBridge.log` and `ioreg -rc PrimeBridge` before chan
 | `PrimeBridge-source/` | Driver sources and `build.sh` |
 | `NVRMFB-patch/nvfbforce.patch` | The change to NullMoth's NVRMFB (`nvrm-fb.cpp`) and NVAccel (`nvrm-accel.cpp`), for tags v2.6.3 to v2.8.1 |
 | `NVRMFB-patch/build-nvrmfb.sh`, `gen_edid.py`, `test_nvfbforce.py` | Rebuild NVRMFB and NVAccel with the patch for a NullMoth version, make the forced EDID, and check the patch |
+| `test_primebridge.py`, `.github/workflows/build.yml` | Installer tests, and the CI that builds every supported NullMoth version |
 | `NVRMFB-patch/NullMoth-LICENSE`, `NullMoth-NOTICE` | NullMoth's license and notice |
 | `install-nvrmfb.sh` | Installs the patched `NVRMFB.kext` and `NVAccel.kext`, keeps your originals, rebuilds the auxiliary kernel collection |
 | `docs/` | Install guide, troubleshooting, FAQ, compatibility, internals and development notes |

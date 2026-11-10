@@ -22,6 +22,10 @@ OC = '4D1FDA02-38C7-4A6A-9CC6-4BCCA8B30102'
 ARGS = ['nvfb=1', 'nvaccel=1', 'nvfbforce=1', 'nvcursor=0', '-nvrmnoflip']
 MARK = {'NVRMFB': b'nvfbforce', 'NVAccel': b'panel by the copy engine'}
 AGENT = os.path.expanduser('~/Library/LaunchAgents/com.myvo.primebridge.guard.plist')
+CONF = '/Library/GPUBundles/nvmtl/nvrm610.conf'
+MINE = ('# --- my settings, kept on update ---', '# --- end my settings ---')
+EVENT_WAIT = 'NVRM_EVENT_WAIT=1'
+LOG = '/var/log/PrimeBridge.log'
 WHY = {'no-hdmi': 'this NVIDIA GPU has no HDMI port to force: PrimeBridge cannot use it to light the panel',
        'refused': 'NVKMS refused the forced HDMI display (kernel log: NVRM-fb lines)',
        'off': 'boot-arg nvfbforce=1 is missing: run ./install.sh again'}
@@ -71,12 +75,49 @@ def gen_edid():
 
 
 def panel_hz(pb):
-    logged = re.findall(rb'panel ([1-9][0-9]*\.[0-9]+) Hz', read('/var/log/PrimeBridge.log'))[-50:]
+    logged = re.findall(rb'panel ([1-9][0-9]*\.[0-9]+) Hz', read(LOG))[-50:]
     return statistics.median(map(float, logged)) if logged else pb[0].get('PanelHz', 0) if pb else 0
+
+
+def conf_value(text, key):
+    v = None
+    for line in text.splitlines():
+        k, eq, val = line.strip().partition('=')
+        if eq and k.strip() == key:
+            v = val.strip()
+    return v
+
+
+def conf_mine(text, line, add):
+    lines = text.splitlines()
+    s = lines.index(MINE[0]) if MINE[0] in lines else -1
+    e = lines.index(MINE[1], s) if s >= 0 and MINE[1] in lines[s:] else -1
+    if e < 0:
+        if not add:
+            return text
+        lines += list(MINE)
+        s, e = len(lines) - 2, len(lines) - 1
+    block = [x for x in lines[s + 1:e] if x != line] + ([line] if add else [])
+    lines[s:e + 1] = [MINE[0]] + block + [MINE[1]] if block else []
+    return '\n'.join(lines) + '\n'
+
+
+def conf_text():
+    return read(CONF).decode('utf-8', 'surrogateescape')
+
+
+def write_conf(text):
+    sudo('cp', CONF, f'{LIB}/nvrm610.conf.{time.strftime("%Y%m%d-%H%M%S")}')
+    subprocess.run(['sudo', 'tee', CONF], input=text.encode('utf-8', 'surrogateescape'), check=True, stdout=subprocess.DEVNULL)
 
 
 def le(b):
     return int.from_bytes(b[:4], 'little')
+
+
+def display_pci():
+    return [le(e['device-id']) << 16 | le(e['vendor-id']) for e in ioreg('IOPCIDevice')
+            if le(e.get('class-code', b'\0\0\0\0')) >> 16 == 3 and 'vendor-id' in e and 'device-id' in e]
 
 
 def detect(a):
@@ -94,8 +135,7 @@ def detect(a):
         die('NullMoth is not installed (no /Library/Extensions/NVRM.kext)')
     if not ioreg('NVRM'):
         die("NullMoth's NVRM is not running: get NullMoth working first (a monitor on the NVIDIA GPU shows an accelerated desktop)")
-    pci = [le(e['device-id']) << 16 | le(e['vendor-id']) for e in ioreg('IOPCIDevice')
-           if le(e.get('class-code', b'\0\0\0\0')) >> 16 == 3 and 'vendor-id' in e and 'device-id' in e]
+    pci = display_pci()
     if not any(x & 0xffff == 0x10de for x in pci):
         die('no NVIDIA GPU found')
     igpu = [x for x in pci if x & 0xffff in (0x1002, 0x8086)]
@@ -227,6 +267,11 @@ def install(a):
              'disabled-patches': '\n'.join(dict.fromkeys(off))}
     for k, val in state.items():
         subprocess.run(['sudo', 'tee', f'{LIB}/{k}'], input=val + '\n', text=True, check=True, stdout=subprocess.DEVNULL)
+    conf = conf_text()
+    if conf and conf_value(conf, 'NVRM_EVENT_WAIT') is None:
+        write_conf(conf_mine(conf, EVENT_WAIT, True))
+        subprocess.run(['sudo', 'tee', f'{LIB}/event-wait'], input='1\n', text=True, check=True, stdout=subprocess.DEVNULL)
+        print(f'added {EVENT_WAIT} to your settings in {CONF}: Metal apps wait for the GPU without spinning the CPU')
     os.makedirs(os.path.dirname(AGENT), exist_ok=True)
     with open(AGENT, 'wb') as f:
         plistlib.dump({'Label': 'com.myvo.primebridge.guard', 'RunAtLoad': True,
@@ -238,6 +283,17 @@ def doctor(a):
     pb, nvrm = ioreg('PrimeBridge'), ioreg('NVRM')
     v, built = version(f'{EXT}/NVRM.kext'), read(f'{LIB}/nullmoth-version').decode().strip()
     args = out('nvram', 'boot-args').split()
+    if a.report:
+        p = pb[0] if pb else {}
+        print('```text')
+        print(f"macOS {out('sw_vers', '-productVersion').strip()} ({out('sw_vers', '-buildVersion').strip()}), "
+              f"{out('sysctl', '-n', 'hw.model').strip()}, {out('sysctl', '-n', 'machdep.cpu.brand_string').strip()}")
+        print('display PCI IDs ' + ' '.join(f'{x & 0xffff:04x}:{x >> 16:04x}' for x in display_pci())
+              + f", OpenCore {out('nvram', OC + ':opencore-version').partition(chr(9))[2].strip() or '?'}")
+        print('boot-args ' + ' '.join(args[1:]))
+        print(f"built for NullMoth {built or '-'}, forced mode {read(f'{LIB}/forced-mode').decode().strip() or '-'}, "
+              f"panel {p.get('GOPWidth', '?')}x{p.get('GOPHeight', '?')} at {p.get('PanelHz', '?')} Hz, "
+              f"effective rate {p.get('EffectiveRateHz', '?')} Hz")
     bad = []
     if not nvrm:
         bad.append("NullMoth's NVRM is not running: fix NullMoth first")
@@ -250,7 +306,7 @@ def doctor(a):
     if miss:
         bad.append(f"boot-args lack {' '.join(miss)} (OpenCore's config.plist changed?): run ./install.sh again")
     why = nvrm[0].get('nvfbforce') if nvrm else None
-    pat = re.findall(rb'igpu writes: PAT 0x[0-9a-f]+ \(PA6 ([^)]+)\)', read('/var/log/PrimeBridge.log'))
+    pat = re.findall(rb'igpu writes: PAT 0x[0-9a-f]+ \(PA6 ([^)]+)\)', read(LOG))
     if pat and pat[-1] != b'WC':
         bad.append("OpenCore's Fix PAT patch is on (iGPU writes are slow, no direct mode): run ./install.sh again")
     if why in WHY:
@@ -260,7 +316,9 @@ def doctor(a):
     else:
         p = pb[0]
         mode = p.get('PrimeMode', '?')
-        print(f"PrimeBridge {p.get('PrimeBridgeVersion')}, mode {mode}, NullMoth {v}, forced {why or '?'}")
+        ew = conf_value(conf_text(), 'NVRM_EVENT_WAIT')
+        print(f"PrimeBridge {p.get('PrimeBridgeVersion')}, mode {mode}, NullMoth {v}, forced {why or '?'}, "
+              f"event wait {'on' if ew == '1' else 'off'}")
         if mode == 'direct-vram-fallback':
             bad.append('NVRMFB has no nvScanoutRedirect (an older patch or a stock NVRMFB): run ./install.sh again')
         elif mode.startswith('staging'):
@@ -274,6 +332,10 @@ def doctor(a):
             if best and (forced[0] != f"{p['GOPWidth']}x{p['GOPHeight']}" or abs(float(forced[2]) - best) > 0.02):
                 print(f"  the panel runs at {hz:g} Hz: run ./install.sh again to force {best:g} Hz instead of {''.join(forced)}")
     print('\n'.join('problem: ' + x for x in bad) if bad else 'all good')
+    if a.report:
+        print(f'--- last 60 lines of {LOG}')
+        print('\n'.join(read(LOG).decode(errors='replace').splitlines()[-60:]))
+        print('```')
 
 
 def uninstall(a):
@@ -298,7 +360,11 @@ def uninstall(a):
         sudo('rm', '-rf', f'{mnt}/EFI/OC/Kexts/PrimeBridge.kext')
 
     edit_config(dev, remove)
-    sudo('rm', '-f', f'{LIB}/added-boot-args', f'{LIB}/nullmoth-version', f'{LIB}/forced-mode', f'{LIB}/disabled-patches')
+    conf = conf_text()
+    if read(f'{LIB}/event-wait').strip() == b'1' and conf and conf_mine(conf, EVENT_WAIT, False) != conf:
+        write_conf(conf_mine(conf, EVENT_WAIT, False))
+    sudo('rm', '-f', f'{LIB}/added-boot-args', f'{LIB}/nullmoth-version', f'{LIB}/forced-mode', f'{LIB}/disabled-patches',
+         f'{LIB}/event-wait')
     if os.path.exists(AGENT):
         os.remove(AGENT)
     print(f'removed: restart to finish. Backups stay in {LIB}')
@@ -315,6 +381,7 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser(prog='primebridge')
     ap.add_argument('command', choices=['install', 'doctor', 'uninstall', 'guard'])
     ap.add_argument('--dry-run', action='store_true', help='detect only, change nothing')
+    ap.add_argument('--report', action='store_true', help='doctor: also print the system, settings and log tail, ready to paste in an issue')
     ap.add_argument('--panel', help='panel resolution, e.g. 1920x1080 (detected otherwise)')
     ap.add_argument('--panel-hz', type=float, help='panel refresh rate (measured by PrimeBridge otherwise, 60 before)')
     ap.add_argument('--efi', help="OpenCore's EFI partition, e.g. disk0s1 (found from OpenCore's boot-path otherwise)")

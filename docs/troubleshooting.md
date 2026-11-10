@@ -10,6 +10,8 @@
 
 It prints PrimeBridge's mode and, when something is wrong, what to do about it. The details are in `/var/log/PrimeBridge.log`, started over at boot once it passes 8 MB.
 
+`./doctor.sh --report` prints the same check, plus the system, the settings and the last 60 lines of the log, in a block ready to paste into an issue.
+
 ```bash
 tail -40 /var/log/PrimeBridge.log
 ioreg -rc PrimeBridge -d1 | grep -E "Version|PrimeMode"

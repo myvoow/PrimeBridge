@@ -29,6 +29,7 @@ cd PrimeBridge
 2. Builds NullMoth's NVRMFB and NVAccel for the installed NullMoth version and macOS version, with the patch and a forced EDID made for the panel, then builds PrimeBridge. When it has the original kexts, it also checks that its unpatched builds match them byte for byte. A difference only means another compiler than NullMoth's, and the build is used anyway.
 3. Edits OpenCore's `config.plist`, after saving a copy in `/Library/PrimeBridge`: adds PrimeBridge to `Kernel > Add`, adds the missing boot-args (`nvfb=1 nvaccel=1 nvfbforce=1 nvcursor=0 -nvrmnoflip`, plus `gfxrst=4` with WhateverGreen), removes `-primeoff`, and turns off the Fix PAT kernel patches ([why](how-it-works.md#why-fix-pat-must-be-off)).
 4. Installs the patched NVRMFB and NVAccel, keeps NullMoth's originals in `/Library/PrimeBridge`, and rebuilds the auxiliary kernel collection.
+5. Adds `NVRM_EVENT_WAIT=1` to NullMoth's own settings block in `/Library/GPUBundles/nvmtl/nvrm610.conf` (`# --- my settings, kept on update ---`), unless the file already sets that key. Metal apps then sleep until the GPU is done instead of polling it: on the first laptop their CPU time dropped by 20 to 67 %, for 2 to 10 % more latency. NullMoth keeps that block when it updates. To opt out, put `NVRM_EVENT_WAIT=0` in the block: `install.sh` leaves a value that is already there alone.
 
 Then approve the extensions in System Settings > Privacy & Security if macOS asks, unplug any monitor from the NVIDIA GPU, restart, and run `./doctor.sh`. The direct mode starts a few seconds after the first frame reaches the panel.
 
@@ -48,9 +49,11 @@ The other iGPUs cannot measure the panel, so give the rate yourself when the pan
 
 NullMoth's updater puts its own NVRMFB and NVAccel back. Until `./install.sh` runs again, PrimeBridge steps aside after 2 minutes and the panel gets macOS's basic display driver, without acceleration. A notification at login says so.
 
+NullMoth 2.9 is not supported yet: the patch does not apply to it, and `install.sh` stops before it changes anything. Do not update NullMoth past 2.8.1 for now.
+
 ## Rollback
 
-- `./uninstall.sh` puts NullMoth's original kexts back, removes PrimeBridge and the boot-args it added from OpenCore, and turns the Fix PAT patches it disabled back on. Restart afterwards. Every `config.plist` the scripts changed is saved in `/Library/PrimeBridge`.
+- `./uninstall.sh` puts NullMoth's original kexts back, removes PrimeBridge and the boot-args it added from OpenCore, turns the Fix PAT patches it disabled back on, and takes out the `NVRM_EVENT_WAIT=1` line it added. Restart afterwards. Every `config.plist` the scripts changed is saved in `/Library/PrimeBridge`.
 - Black internal screen: add `-primeoff` to the boot-args to stop PrimeBridge. You can also plug a monitor into the NVIDIA GPU before booting: nothing is forced then, the monitor works as usual and the panel mirrors it. When no NVIDIA head comes up within 2 minutes, PrimeBridge steps aside by itself so macOS's basic display driver can take the panel.
 
 Next: [check that it works](troubleshooting.md).

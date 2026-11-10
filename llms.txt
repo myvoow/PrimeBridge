@@ -2,7 +2,7 @@
 
 PrimeBridge lets a hackintosh laptop without a MUX switch show the desktop on its internal screen while macOS renders on the NVIDIA GPU (NullMoth driver, Metal). The internal panel is wired only to the AMD iGPU, which has no macOS driver. PrimeBridge reuses the framebuffer the firmware (GOP) left on the iGPU and makes NullMoth's frames land in it.
 
-PrimeBridge supports the 19 AMD iGPU PCI IDs of `docs/compatibility.md`. Two laptops have run it, both with iGPU ID `0x1681`. The first is an Acer Nitro V 15 ANV15-41 (Ryzen 5 7535HS, RTX 4050 Laptop, 1920x1080 144 Hz panel), macOS 26.7.2, NullMoth 2.6.3, PrimeBridge 0.7.0 and 0.7.1 installed by `install.sh`: direct mode with the GPU copy engine, 72 Hz forced mode. The second has a Ryzen 7 6800H and an RTX 3050, and works correctly on PrimeBridge 0.4.8 (0.7.1 not tried yet). The patch also builds for NullMoth 2.7.2 and 2.8.1, for macOS 15 and 26, which have not run on a laptop. The other iGPU IDs have not run on a laptop either. Keep an HDMI monitor at hand for your first boots.
+PrimeBridge supports the 19 AMD iGPU PCI IDs of `docs/compatibility.md`. Two laptops have run it, both with iGPU ID `0x1681`. The first is an Acer Nitro V 15 ANV15-41 (Ryzen 5 7535HS, RTX 4050 Laptop, 1920x1080 144 Hz panel), macOS 26.7.2, NullMoth 2.6.3 and 2.8.1, PrimeBridge 0.7.0 and 0.7.1 installed by `install.sh`: direct mode with the GPU copy engine, 72 Hz forced mode. The second has a Ryzen 7 6800H and an RTX 3050, and works correctly on PrimeBridge 0.7.1. The patch builds for every NullMoth tag from 2.6.3 to 2.8.1, for macOS 15 and 26, and 2.7.x has not run on a laptop. NullMoth 2.9 is not supported yet. The other iGPU IDs have not run on a laptop either. Keep an HDMI monitor at hand for your first boots.
 
 ## What is in this repository
 
@@ -11,10 +11,12 @@ PrimeBridge supports the 19 AMD iGPU PCI IDs of `docs/compatibility.md`. Two lap
 | `install.sh`, `doctor.sh`, `uninstall.sh` | Install, check and remove PrimeBridge. All three run `primebridge.py`. |
 | `primebridge.py` | Detection (macOS, Command Line Tools, NullMoth, GPUs, panel, OpenCore EFI), OpenCore `config.plist` editing, install state in `/Library/PrimeBridge`, login notification after a NullMoth update. |
 | `PrimeBridge-source/` | PrimeBridge sources and `build.sh`. |
-| `NVRMFB-patch/nvfbforce.patch` | The source change to NullMoth's NVRMFB (`nvrm-fb.cpp`, `nvrm_vram_abi.h`) and NVAccel (`nvrm-accel.cpp`, `nvrm_vram_abi.h`). Applies to every tag from v2.6.3 to v2.8.1. |
+| `NVRMFB-patch/nvfbforce.patch` | The source change to NullMoth's NVRMFB (`nvrm-fb.cpp`, `nvrm_vram_abi.h`) and NVAccel (`nvrm-accel.cpp`, `nvrm_vram_abi.h`). Applies to every tag from v2.6.3 to v2.8.1, not to v2.9. |
 | `NVRMFB-patch/build-nvrmfb.sh` | Builds NVRMFB and NVAccel with the patch for one NullMoth version and macOS version. |
 | `NVRMFB-patch/gen_edid.py` | The forced EDID for the panel's resolution (CVT reduced blanking v2, CTA-861 HDMI block above 165 MHz). |
-| `NVRMFB-patch/test_nvfbforce.py` | Static checks of the patched source and of the generated EDID. |
+| `NVRMFB-patch/test_nvfbforce.py` | Static checks of the patched source and of the generated EDID, on the panel and on a set from 1366x768 to 4K. |
+| `test_primebridge.py` | Checks of the installer's edits to `nvrm610.conf`. |
+| `.github/workflows/build.yml` | CI: tests and builds on NullMoth 2.6.3, 2.7.2 and 2.8.1 for macOS 15 and 26 at every push, and the newest NullMoth release every Monday. |
 | `install-nvrmfb.sh` | Installs NVRMFB and NVAccel if the installed NullMoth is the same version, keeps the originals, rebuilds the auxiliary kernel collection. |
 | `NVRMFB-patch/NullMoth-LICENSE`, `NullMoth-NOTICE` | NullMoth's license (PolyForm Noncommercial). The patched kexts are under it: noncommercial use only. |
 | `docs/` | The user documentation: install guide, troubleshooting, FAQ, compatibility, internals, development. |
@@ -59,7 +61,7 @@ AMD Vanilla's README says the patch does not improve performance and that some s
 ## Requirements
 
 - A laptop whose internal panel is wired only to an AMD iGPU that macOS has no driver for: Radeon 680M / 660M (`1002:1681`, the only one tested), 780M / 760M / 740M (`15bf`, `15c8`, `1900`, `1901`), 890M / 880M (`150e`), 860M / 840M / 820M (`1114`, `1902`), 8060S / 8050S (`1586`) or 610M (`164e`, `13c0`, `1506`). Vega iGPUs are not matched, since NootedRed drives them. Intel iGPUs are not matched yet.
-- An NVIDIA GPU that NullMoth drives, with NullMoth 2.6.3 or later already working: a monitor plugged into the NVIDIA GPU shows an accelerated desktop.
+- An NVIDIA GPU that NullMoth drives, with NullMoth 2.6.3 to 2.8.1 already working: a monitor plugged into the NVIDIA GPU shows an accelerated desktop.
 - An HDMI port wired to the NVIDIA GPU, with nothing plugged into it at boot. That is the case on most gaming laptops: a monitor on that port shows NullMoth's desktop. A laptop without one cannot use PrimeBridge yet.
 - OpenCore, with `Misc > Security > Vault` set to `Optional`.
 - macOS 15 or 26, already booting normally (USB ports mapped and so on).
@@ -80,6 +82,7 @@ cd PrimeBridge
 2. Builds NullMoth's NVRMFB and NVAccel for the installed NullMoth version and macOS version, with the patch and a forced EDID made for the panel, then builds PrimeBridge. When it has the original kexts, it also checks that its unpatched builds match them byte for byte. A difference only means another compiler than NullMoth's, and the build is used anyway.
 3. Edits OpenCore's `config.plist`, after saving a copy in `/Library/PrimeBridge`: adds PrimeBridge to `Kernel > Add`, adds the missing boot-args (`nvfb=1 nvaccel=1 nvfbforce=1 nvcursor=0 -nvrmnoflip`, plus `gfxrst=4` with WhateverGreen), removes `-primeoff`, and turns off the Fix PAT kernel patches ([why](#why-fix-pat-must-be-off)).
 4. Installs the patched NVRMFB and NVAccel, keeps NullMoth's originals in `/Library/PrimeBridge`, and rebuilds the auxiliary kernel collection.
+5. Adds `NVRM_EVENT_WAIT=1` to NullMoth's own settings block in `/Library/GPUBundles/nvmtl/nvrm610.conf` (`# --- my settings, kept on update ---`), unless the file already sets that key. Metal apps then sleep until the GPU is done instead of polling it: on the first laptop their CPU time dropped by 20 to 67 %, for 2 to 10 % more latency. NullMoth keeps that block when it updates. To opt out, put `NVRM_EVENT_WAIT=0` in the block: `install.sh` leaves a value that is already there alone.
 
 Then approve the extensions in System Settings > Privacy & Security if macOS asks, unplug any monitor from the NVIDIA GPU, restart, and run `./doctor.sh`. The direct mode starts a few seconds after the first frame reaches the panel.
 
@@ -93,14 +96,16 @@ The forced HDMI mode runs at a whole divisor of the panel's refresh rate (72 Hz 
 
 NullMoth's updater puts its own NVRMFB and NVAccel back. Until `./install.sh` runs again, PrimeBridge steps aside after 2 minutes and the panel gets macOS's basic display driver, without acceleration. A notification at login says so.
 
+NullMoth 2.9 is not supported yet: the patch does not apply to it, and `install.sh` stops before it changes anything. Do not update NullMoth past 2.8.1 for now.
+
 ### Rollback
 
-- `./uninstall.sh` puts NullMoth's original kexts back, removes PrimeBridge and the boot-args it added from OpenCore, and turns the Fix PAT patches it disabled back on. Restart afterwards. Every `config.plist` the scripts changed is saved in `/Library/PrimeBridge`.
+- `./uninstall.sh` puts NullMoth's original kexts back, removes PrimeBridge and the boot-args it added from OpenCore, turns the Fix PAT patches it disabled back on, and takes out the `NVRM_EVENT_WAIT=1` line it added. Restart afterwards. Every `config.plist` the scripts changed is saved in `/Library/PrimeBridge`.
 - Black internal screen: add `-primeoff` to the boot-args to stop PrimeBridge. You can also plug a monitor into the NVIDIA GPU before booting: nothing is forced then, the monitor works as usual and the panel mirrors it. When no NVIDIA head comes up within 2 minutes, PrimeBridge steps aside by itself so macOS's basic display driver can take the panel.
 
 ## Checking that it works
 
-`./doctor.sh` prints the mode and what to do when something is wrong. Everything PrimeBridge does is logged to `/var/log/PrimeBridge.log`, started over at boot once it passes 8 MB.
+`./doctor.sh` prints the mode and what to do when something is wrong. Everything PrimeBridge does is logged to `/var/log/PrimeBridge.log`, started over at boot once it passes 8 MB. `./doctor.sh --report` prints the same check, plus the system, the settings and the last 60 lines of the log, in a block ready to paste into an issue.
 
 ```bash
 tail -40 /var/log/PrimeBridge.log
@@ -146,7 +151,7 @@ The GOP framebuffer path is the same on every iGPU PrimeBridge matches. Only the
 
 PrimeBridge does not touch NVRMFB's private fields: it calls `nvScanoutRedirect` and reads `nvScanoutInfo`, both answered by the patched NVRMFB. `nvScanoutInfo` also reports the scanout allocation (`fMemBytes`) and, once the scanout is redirected to memory with a physical address, flags it and gives that address to NVAccel. NVRMFB also publishes two properties on NVRM: `nvfbforce-display`, the forced display or 0, and `nvfbforce`, what the force pass did (`forced`, `monitor`, `no-hdmi`, `refused` or `off`).
 
-`install.sh` rebuilds NVRMFB and NVAccel for whatever NullMoth version is installed. It clones that NullMoth tag, and NVIDIA's open-gpu-kernel-modules at the release the tag is built on, into `~/Library/Caches/PrimeBridge`. The release comes from `NV_XNU_FW_DIR` in NullMoth's `kexts/NVRM/os-xnu2.cpp`. NullMoth's docs lag behind: 2.8.1's docs say 615.78.08 and its code uses 620.70.06. The same `nvfbforce.patch` applies to every tag from v2.6.3 to v2.8.1, and `install.sh` stops on a version it does not apply to.
+`install.sh` rebuilds NVRMFB and NVAccel for whatever NullMoth version is installed. It clones that NullMoth tag, and NVIDIA's open-gpu-kernel-modules at the release the tag is built on, into `~/Library/Caches/PrimeBridge`. The release comes from `NV_XNU_FW_DIR` in NullMoth's `kexts/NVRM/os-xnu2.cpp`. NullMoth's docs lag behind: 2.8.1's docs say 615.78.08 and its code uses 620.70.06. The same `nvfbforce.patch` applies to every tag from v2.6.3 to v2.8.1, and `install.sh` stops on a version it does not apply to, such as v2.9. GitHub Actions builds the supported tags at every push and tries the newest NullMoth release every Monday.
 
 To build by hand:
 

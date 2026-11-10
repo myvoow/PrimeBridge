@@ -1,0 +1,35 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        nullmoth: ['2.6.3', '2.7.2', '2.8.1']
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -I test_primebridge.py
+      - run: sh PrimeBridge-source/build.sh
+      - name: NullMoth ${{ matrix.nullmoth }} for macOS 15, 1920x1080 at 144 Hz
+        run: MACOS_MAJOR=15 PANELHZ=144 WORK=$RUNNER_TEMP/nm sh NVRMFB-patch/build-nvrmfb.sh ${{ matrix.nullmoth }}
+      - name: NullMoth ${{ matrix.nullmoth }} for macOS 26, 2560x1600 at 165 Hz
+        run: MACOS_MAJOR=26 PANEL=2560x1600 PANELHZ=165 WORK=$RUNNER_TEMP/nm sh NVRMFB-patch/build-nvrmfb.sh ${{ matrix.nullmoth }}
+
+  newest-nullmoth:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: The newest NullMoth release takes the patch
+        run: |
+          V=$(git ls-remote --tags --refs https://github.com/nullmoth/nvidia-macos-driver.git 'v*' | sed 's|.*refs/tags/v||' | grep -E '^[0-9]+(\.[0-9]+)*$' | sort -V | tail -1)
+          echo "newest NullMoth: $V"
+          WORK=$RUNNER_TEMP/nm sh NVRMFB-patch/build-nvrmfb.sh "$V"
