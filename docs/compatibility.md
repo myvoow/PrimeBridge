@@ -29,13 +29,13 @@ On a Vega iGPU, PrimeBridge and NootedRed cannot run together, since both take t
 | | First laptop | Second laptop | Third laptop |
 |---|---|---|---|
 | Model | Acer Nitro V 15 ANV15-41 | | Acer Nitro V 15 ANV15-41-R1JY |
-| CPU | Ryzen 5 7535HS | Ryzen 7 6800H | |
-| iGPU ID | `1002:1681` | | |
-| NVIDIA GPU | GeForce RTX 4050 Laptop | RTX 3050 | |
+| CPU | Ryzen 5 7535HS | Ryzen 7 6800H | Ryzen 5 6600H |
+| iGPU ID | `1002:1681` | | Radeon 660M (ID not reported) |
+| NVIDIA GPU | GeForce RTX 4050 Laptop | RTX 3050 | RTX 3050 |
 | Panel | 1920x1080, 144 Hz | | |
 | Software | macOS 26.7.2, NullMoth 2.6.3 | | |
-| PrimeBridge | 0.7.1 | 0.4.8 | |
-| Result | Direct mode with the copy engine, forced mode 72 Hz | Works correctly, has not tried 0.7.1 yet | |
+| PrimeBridge | 0.7.1 | 0.7.1 | |
+| Result | Direct mode with the copy engine, forced mode 72 Hz | Works correctly | |
 
 The patch also builds for NullMoth 2.7.2 and 2.8.1, for macOS 15 and 26, but those have not run on a laptop yet.
 

@@ -56,7 +56,7 @@ PrimeBridge works correctly on these two laptops, which both use iGPU ID `1002:1
 | CPU | NVIDIA GPU | PrimeBridge |
 |:---|:---|:---:|
 | Ryzen 5 7535HS | GeForce RTX 4050 Laptop | 0.7.1 |
-| Ryzen 7 6800H | RTX 3050 | 0.4.8 |
+| Ryzen 7 6800H | RTX 3050 | 0.7.1 |
 
 > [!NOTE]
 > PrimeBridge is still a work in progress, and the optimization is not the best yet.
