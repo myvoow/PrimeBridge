@@ -71,5 +71,7 @@ ce = section(ac, 'static bool nvAccelIopToPanel(NVAccel *a, IOService *fb, unsig
 check('the copy engine runs only for a redirected scanout, a same-geometry surface and VRAM pixels newer than system memory',
       all(t in ce for t in ('NVRM_SCANOUT_FLAG_SYSPHYS', 's->getBytesPerRow() != q.pitch', '!nvSVPend(id, 2)', '!(valid[0] & 1u)',
                             'nvAccelResPluginWrote(res)', 'vm->fBytes >= len')))
+check('a frame the copy engine did not take is never copied from stale system memory: the panel keeps its picture',
+      'return !nvAccelSurfCopyReady(s, head) || nvSVPend(id, 2);' in ce and ce.count('return keep(') == 3)
 check('a copy engine frame is counted like a CPU one', 'OSAddAtomic64(1, &gCntIopOk)' in ce)
 sys.exit(1 if fails else 0)

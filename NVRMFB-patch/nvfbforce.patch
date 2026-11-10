@@ -1,5 +1,5 @@
 diff --git a/kexts/NVRM/accel/nvrm-accel.cpp b/kexts/NVRM/accel/nvrm-accel.cpp
-index 71f8c1f..54795a1 100644
+index 71f8c1f..ae5ed46 100644
 --- a/kexts/NVRM/accel/nvrm-accel.cpp
 +++ b/kexts/NVRM/accel/nvrm-accel.cpp
 @@ -1294,6 +1294,7 @@ bool NVDisplayPipe::isTransactionComplete(IOAccelDisplayPipeTransaction2 *)
@@ -18,7 +18,7 @@ index 71f8c1f..54795a1 100644
          if (!nvAccelSurfCopyReady(s, head)) return kIOReturnSuccess;
          const unsigned fmt = s->getPixelFormat();
          if (fmt != 0x42475241u) NVIOP_FAIL(kIOReturnUnsupported, "surface 0x%x format 0x%08x is not BGRA", s->getSurfaceID(), fmt);
-@@ -2352,6 +2354,55 @@ static bool nvAccelSurfCopyReady(IOSurface *s, unsigned head)
+@@ -2352,6 +2354,62 @@ static bool nvAccelSurfCopyReady(IOSurface *s, unsigned head)
      return false;
  }
  
@@ -31,11 +31,17 @@ index 71f8c1f..54795a1 100644
 +    const unsigned id = _ZNK9IOSurface12getSurfaceIDEv((void *)s);
 +    if (s->getPixelFormat() != 0x42475241u || s->getWidth() != q.width || s->getHeight() != q.height ||
 +        s->getBytesPerRow() != q.pitch || !nvSVPend(id, 2)) return false;
++    unsigned st = NVRM_SS_OFF;
++    static SInt32 gIopCeKeeps;
++    auto keep = [&](const char *why) {
++        if (OSIncrementAtomic(&gIopCeKeeps) < 32) ALOG("iop: the copy engine did not take surface 0x%x (%s, status 0x%x)", id, why, st);
++        return !nvAccelSurfCopyReady(s, head) || nvSVPend(id, 2);
++    };
 +    struct NVRMRmHandles h; nvSVZero(&h, sizeof h);
-+    if (!nvAccelRmHandles(&h)) return false;
++    if (!nvAccelRmHandles(&h)) return keep("no RM handles");
 +    bool locked = false;
 +    for (unsigned i = 0; i < 8 && !(locked = nvFamLock(a, true)); i++) IOSleep(1);
-+    if (!locked) return false;
++    if (!locked) return keep("accelerator lock busy");
 +    void *cache = _ZN22IOGraphicsAccelerator223deviceCacheForIOSurfaceEP9IOSurfacej((void *)a, (void *)s, 0);
 +    OSObject *ctx = cache ? *(OSObject *volatile *)((unsigned char *)cache + 0x20) : nullptr;
 +    NVResource *res = OSDynamicCast(NVResource, ctx);
@@ -54,14 +60,15 @@ index 71f8c1f..54795a1 100644
 +            p.pages = pa; p.pageCount = pages; p.length = len;
 +            nvAccelIopHome(fb, head);
 +            nvrm->callPlatformFunction(sym, false, &p, nullptr, nullptr, nullptr);
-+            ok = p.status == 0;
++            st = p.status;
++            ok = st == 0;
 +        }
 +        if (sym) sym->release();
 +        if (pa) IOFree(pa, pages * sizeof *pa);
 +    }
 +    if (cache) ((OSObject *)cache)->release();
 +    nvFamUnlock(a);
-+    if (!ok) return false;
++    if (!ok) return keep("not copied");
 +    OSAddAtomic64(1, &gCntIopSrcSurf); OSAddAtomic64(1, &gCntIopOk); OSAddAtomic64(1, &gCntIopOkHead[head]);
 +    static SInt32 gIopCeLogs;
 +    if (gIopCeLogs < 3) {
