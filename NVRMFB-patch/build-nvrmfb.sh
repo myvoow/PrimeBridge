@@ -13,6 +13,8 @@ MAJOR=${MACOS_MAJOR:-$(sw_vers -productVersion | cut -d. -f1)}
 W=$(cd "$W" && pwd)
 [ "$(git -C "$W" describe --tags --exact-match 2>/dev/null)" = "v$V" ] || { echo "$W is not a NullMoth v$V checkout: remove it or set WORK="; exit 1; }
 git -C "$W" checkout -q -- kexts
+# before any download or build: an unsupported NullMoth stops here with a clear message, not a compiler error
+git -C "$W" apply --check "$P/nvfbforce.patch" 2>/dev/null || { echo "NullMoth $V is not supported yet (PrimeBridge supports 2.6.3 to 2.8.1), nothing was changed. Stay on 2.8.1, or try NullMoth's own hybrid mode (boot-arg nmhybrid=1)."; exit 1; }
 NEED=${OGKM_TAG:-$(sed -n 's|^#define NV_XNU_FW_DIR "/Library/NullMoth/nvfw/nvidia/\([0-9.]*\)/"|\1|p' "$W/kexts/NVRM/os-xnu2.cpp")}
 [ -n "$NEED" ] || { echo "cannot find which NVIDIA release NullMoth $V is built on (set OGKM_TAG)"; exit 1; }
 OGKM=${OGKM:-$HOME/Library/Caches/PrimeBridge/ogkm-$NEED}
