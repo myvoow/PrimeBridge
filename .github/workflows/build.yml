@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        nullmoth: ['2.6.3', '2.7.2', '2.8.1']
+        nullmoth: ['2.6.3', '2.7.2', '2.8.1', '2.9', '3.0']
     steps:
       - uses: actions/checkout@v4
       - run: python3 -I test_primebridge.py

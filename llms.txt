@@ -159,7 +159,7 @@ To build by hand:
 PANEL=1920x1080 PANELHZ=144 sh NVRMFB-patch/build-nvrmfb.sh 2.8.1 [stock NVRMFB binary] [stock NVAccel binary]
 ```
 
-NullMoth builds a different NVAccel for macOS 15 and 26: the script builds for the Mac it runs on, and `MACOS_MAJOR=15` or `26` picks the other one. `WORK=` and `OGKM=` point it to existing checkouts, `OGKM_TAG=` overrides the NVIDIA release, and `EXTRA_PATCH=` applies one more patch after `nvfbforce.patch`. The result is in `nullmoth-<version>/patched`, and `sudo sh install-nvrmfb.sh <NVRMFB.kext> <NVAccel.kext>` installs it.
+NullMoth builds a different NVAccel for macOS 15 and 26: the script builds for the Mac it runs on, and `MACOS_MAJOR=15` or `26` picks the other one. `WORK=` and `OGKM=` point it to existing checkouts (`OGKM=` must be a pristine NVIDIA tree: for NullMoth 2.9 and later the script applies NullMoth's `kexts/NVRM/patches` to a copy, `<OGKM>-nm<version>`), `OGKM_TAG=` overrides the NVIDIA release, and `EXTRA_PATCH=` applies one more patch after `nvfbforce.patch`. The result is in `nullmoth-<version>/patched`, and `sudo sh install-nvrmfb.sh <NVRMFB.kext> <NVAccel.kext>` installs it.
 
 ### PrimeBridge boot-args
 

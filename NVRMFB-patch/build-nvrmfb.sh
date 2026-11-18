@@ -19,6 +19,26 @@ OGKM=${OGKM:-$HOME/Library/Caches/PrimeBridge/ogkm-$NEED}
 [ -f "$OGKM/version.mk" ] || git -c advice.detachedHead=false clone -q --depth 1 -b "$NEED" https://github.com/NVIDIA/open-gpu-kernel-modules.git "$OGKM"
 HAVE=$(sed -n 's/^NVIDIA_VERSION = //p' "$OGKM/version.mk")
 [ "$NEED" = "$HAVE" ] || { echo "NullMoth $V is built on NVIDIA $NEED, $OGKM has $HAVE: remove it or set OGKM="; exit 1; }
+# NullMoth 2.9+ builds against NVIDIA's tree with its own patch chain applied (kexts/NVRM/patches, as build/build_rm620.sh
+# does): NVRMFB needs the patched nvkms-kapi.h. The pristine tree is shared by every version, so patch a copy of it.
+NMP=$W/kexts/NVRM/patches
+if ls "$NMP"/*.patch >/dev/null 2>&1; then
+    WANT=$(cd "$NMP" && ls *.patch | LC_ALL=C sort | tr '\n' ' ')
+    OGKMP=$OGKM-nm$V
+    if [ ! -f "$OGKMP/.nm-patches" ] || [ "$(LC_ALL=C sort "$OGKMP/.nm-patches" | tr '\n' ' ')" != "$WANT" ]; then
+        T=$OGKMP.tmp; rm -rf "$T" "$OGKMP"; cp -R "$OGKM" "$T"; rm -rf "$T/.git"; : > "$T/.nm-patches"
+        for f in $(cd "$NMP" && ls *.patch | LC_ALL=C sort); do
+            ok=0
+            for root in . src/nvidia-modeset; do
+                ( cd "$T/$root" && patch -p1 --fuzz=0 --dry-run < "$NMP/$f" >/dev/null 2>&1 && patch -p1 --fuzz=0 --no-backup-if-mismatch < "$NMP/$f" >/dev/null ) && { ok=1; break; }
+            done
+            [ $ok = 1 ] || { rm -rf "$T"; echo "NullMoth $V's $f does not apply to NVIDIA $NEED in $OGKM: remove it or set OGKM= to a pristine tree"; exit 1; }
+            echo "$f" >> "$T/.nm-patches"
+        done
+        mv "$T" "$OGKMP"
+    fi
+    OGKM=$OGKMP
+fi
 G=$OGKM/src
 KH=$(xcrun --show-sdk-path)/System/Library/Frameworks/Kernel.framework/Headers
 
@@ -27,6 +47,8 @@ build() {
     xcrun clang++ -arch x86_64 -fapple-kext -mkernel -nostdinc -I"$KH" -I"$W/kexts/NVRMFB" -I"$W/kexts/NVRMFB/fb" \
         -I"$G/nvidia-modeset/os-interface/include" -I"$G/nvidia-modeset/kapi/interface" -I"$G/nvidia-modeset/interface" \
         -I"$G/common/sdk/nvidia/inc" -I"$G/common/unix/common/inc" -I"$G/common/inc" -I"$G/nvidia/arch/nvalloc/unix/include" \
+        -I"$G/common/shared/inc" -I"$G/nvidia-modeset/kapi/include" -I"$G/nvidia-modeset/include" -I"$G/common/modeset" \
+        -I"$G/common/unix/common/utils/interface" \
         -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT -mmacosx-version-min=15.0 -std=c++17 \
         -fno-rtti -fno-exceptions -fno-builtin -fno-common -O2 -w -c "$W/kexts/NVRMFB/fb/nvrm-fb.cpp" -o "$1/nvrm-fb.o"
     xcrun clang++ -arch x86_64 -mmacosx-version-min=15.0 -fapple-kext -nostdlib -Xlinker -kext -lkmodc++ -lkmod -lcc_kext \
