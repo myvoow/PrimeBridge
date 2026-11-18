@@ -37,7 +37,7 @@ On a Vega iGPU, PrimeBridge and NootedRed cannot run together, since both take t
 | PrimeBridge | 0.7.1 | 0.7.1 | |
 | Result | Direct mode with the copy engine, forced mode 72 Hz | Works correctly | |
 
-The patch builds for every NullMoth tag from 2.6.3 to 2.8.1, for macOS 15 and 26, and the CI checks 2.6.3, 2.7.2 and 2.8.1 at every push. 2.7.x has not run on a laptop yet. NullMoth 2.9 is not supported: the patch does not apply to it.
+The patch builds for every NullMoth tag from 2.6.3 to 2.8.1, for macOS 15 and 26, and the CI checks 2.6.3, 2.7.2 and 2.8.1 at every push. 2.7.x has not run on a laptop yet. NullMoth 2.9 and 3.0 are not supported: the patch does not apply to them.
 
 ## Known limits
 

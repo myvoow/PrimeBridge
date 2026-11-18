@@ -62,14 +62,14 @@ PrimeBridge works correctly on these two laptops, which both use iGPU ID `1002:1
 > PrimeBridge is still a work in progress, and the optimization is not the best yet.
 
 > [!TIP]
-> NullMoth 2.9 has the same idea built in: its experimental hybrid mode (`NMGopFB.kext`, boot-arg `nmhybrid=1`) maps the firmware framebuffer the way PrimeBridge does, with my permission. On 2.9 it may work for you too, and it is simpler to set up ([NullMoth's guide](https://github.com/nullmoth/nvidia-macos-driver/blob/v2.9/docs/HYBRID-LAPTOPS.md)). PrimeBridge itself does not support 2.9 yet.
+> NullMoth 2.9 has the same idea built in: its experimental hybrid mode (`NMGopFB.kext`, boot-arg `nmhybrid=1`) maps the firmware framebuffer the way PrimeBridge does, with my permission. On 2.9 it may work for you too, and it is simpler to set up ([NullMoth's guide](https://github.com/nullmoth/nvidia-macos-driver/blob/v2.9/docs/HYBRID-LAPTOPS.md)). PrimeBridge itself does not support 2.9 or 3.0 yet.
 
 ## Requirements
 
 | | |
 |:---|:---|
 | iGPU | An AMD iGPU from the [supported list](docs/compatibility.md#supported-igpus), with the internal panel wired only to it |
-| NVIDIA GPU | NullMoth 2.6.3 to 2.8.1 already working (2.9 is not supported yet) |
+| NVIDIA GPU | NullMoth 2.6.3 to 2.8.1 already working (2.9 and 3.0 are not supported yet) |
 | HDMI | A port wired to the NVIDIA GPU, with nothing plugged into it at boot |
 | Bootloader | OpenCore, with `Misc > Security > Vault` set to `Optional` |
 | macOS | 15 or 26, and the Xcode Command Line Tools |

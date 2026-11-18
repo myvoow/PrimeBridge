@@ -49,7 +49,7 @@ The other iGPUs cannot measure the panel, so give the rate yourself when the pan
 
 NullMoth's updater puts its own NVRMFB and NVAccel back. Until `./install.sh` runs again, PrimeBridge steps aside after 2 minutes and the panel gets macOS's basic display driver, without acceleration. A notification at login says so.
 
-NullMoth 2.9 is not supported yet: the patch does not apply to it, and `install.sh` stops before it changes anything. Do not update NullMoth past 2.8.1 for now.
+NullMoth 2.9 and 3.0 are not supported yet: the patch does not apply to them, and `install.sh` stops before it changes anything. Do not update NullMoth past 2.8.1 for now.
 
 ## Rollback
 
