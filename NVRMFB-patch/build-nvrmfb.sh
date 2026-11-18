@@ -19,10 +19,11 @@ OGKM=${OGKM:-$HOME/Library/Caches/PrimeBridge/ogkm-$NEED}
 [ -f "$OGKM/version.mk" ] || git -c advice.detachedHead=false clone -q --depth 1 -b "$NEED" https://github.com/NVIDIA/open-gpu-kernel-modules.git "$OGKM"
 HAVE=$(sed -n 's/^NVIDIA_VERSION = //p' "$OGKM/version.mk")
 [ "$NEED" = "$HAVE" ] || { echo "NullMoth $V is built on NVIDIA $NEED, $OGKM has $HAVE: remove it or set OGKM="; exit 1; }
-# NullMoth 2.9+ builds against NVIDIA's tree with its own patch chain applied (kexts/NVRM/patches, as build/build_rm620.sh
-# does): NVRMFB needs the patched nvkms-kapi.h. The pristine tree is shared by every version, so patch a copy of it.
+# NullMoth 2.9+ builds against NVIDIA's tree with its own patch chain applied (kexts/NVRM/patches, by build/build_rm620.sh):
+# NVRMFB needs the patched nvkms-kapi.h. Older versions ship patches too, applied by hand and not to their NVIDIA tag, and
+# build against the pristine tree. The pristine tree is shared by every version, so patch a copy of it.
 NMP=$W/kexts/NVRM/patches
-if ls "$NMP"/*.patch >/dev/null 2>&1; then
+if [ -f "$W/build/build_rm620.sh" ] && ls "$NMP"/*.patch >/dev/null 2>&1; then
     WANT=$(cd "$NMP" && ls *.patch | LC_ALL=C sort | tr '\n' ' ')
     OGKMP=$OGKM-nm$V
     if [ ! -f "$OGKMP/.nm-patches" ] || [ "$(LC_ALL=C sort "$OGKMP/.nm-patches" | tr '\n' ' ')" != "$WANT" ]; then
